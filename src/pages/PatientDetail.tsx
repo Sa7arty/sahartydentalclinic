@@ -42,13 +42,15 @@ type Tab = 'info' | 'visits' | 'medical' | 'notes' | 'teeth' | 'photos' | 'ledge
 const PATIENT_SELECT =
   '*, provider:providers(first_name,last_name), group:patient_groups(name), created_by_profile:profiles!patients_created_by_fkey(full_name,email), updated_by_profile:profiles!patients_updated_by_fkey(full_name,email)'
 
+const LEDGER_LABELS: Record<string, string> = { charge: 'Charge', payment: 'Payment', discount: 'Discount' }
+
 export default function PatientDetail() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const { session, isDentist } = useAuth()
   const { settings } = useSettings()
   const [tab, setTab] = useState<Tab>('info')
-  const [txType, setTxType] = useState<'payment' | 'charge' | 'provider_fee' | 'lab_fee'>('payment')
+  const [txType, setTxType] = useState<'payment' | 'charge' | 'discount' | 'provider_fee' | 'lab_fee'>('payment')
   const [patient, setPatient] = useState<Patient | null>(null)
   const [visits, setVisits] = useState<Visit[]>([])
   const [records, setRecords] = useState<ClinicalRecord[]>([])
@@ -356,7 +358,7 @@ export default function PatientDetail() {
     const occurredAt = form.get('occurred_at')
     const occurred = occurredAt ? new Date(occurredAt as string) : new Date()
     let error
-    if (txType === 'charge' || txType === 'payment') {
+    if (txType === 'charge' || txType === 'payment' || txType === 'discount') {
       ;({ error } = await supabase.from('ledger_entries').insert({
         patient_id: id,
         entry_type: txType,
@@ -972,6 +974,7 @@ export default function PatientDetail() {
               <select value={txType} onChange={(e) => setTxType(e.target.value as typeof txType)} className="rounded-lg border border-slate-300 px-3 py-2 text-sm">
                 <option value="payment">Payment (in)</option>
                 <option value="charge">Charge (owed)</option>
+                <option value="discount">Discount (off the bill)</option>
                 {isDentist && <option value="provider_fee">Provider fee (cost)</option>}
                 {isDentist && <option value="lab_fee">Lab fee (cost)</option>}
               </select>
@@ -997,7 +1000,7 @@ export default function PatientDetail() {
               <label className="mb-1 block text-xs text-slate-500">Description</label>
               <input name="description" placeholder="Optional" className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
             </div>
-            {txType !== 'charge' && (
+            {(txType === 'payment' || txType === 'provider_fee' || txType === 'lab_fee') && (
               <div>
                 <label className="mb-1 block text-xs text-slate-500">Method</label>
                 <select name="payment_method" className="rounded-lg border border-slate-300 px-3 py-2 text-sm">
@@ -1024,7 +1027,7 @@ export default function PatientDetail() {
               row.kind === 'ledger' ? (
                 editingLedgerId === row.ledger.id ? (
                   <form key={`l-${row.ledger.id}`} onSubmit={(e) => handleSaveLedgerEdit(e, row.ledger)} className="space-y-2 border-b border-slate-100 px-4 py-3 last:border-0">
-                    <p className="text-sm font-medium text-navy-900">{row.ledger.entry_type === 'charge' ? 'Edit charge' : 'Edit payment'}</p>
+                    <p className="text-sm font-medium text-navy-900">Edit {LEDGER_LABELS[row.ledger.entry_type].toLowerCase()}</p>
                     <input name="description" defaultValue={row.ledger.description ?? ''} placeholder="Description" className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
                     <input name="amount" type="number" step="0.01" min="0" required defaultValue={row.ledger.amount} className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
                     {row.ledger.entry_type === 'payment' && (
@@ -1050,15 +1053,32 @@ export default function PatientDetail() {
                   <div key={`l-${row.ledger.id}`} className="flex items-center justify-between gap-3 border-b border-slate-100 px-4 py-3 last:border-0">
                     <div className="min-w-0">
                       <p className="text-navy-900">
-                        <span className="mr-1.5 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium uppercase text-slate-500">{row.ledger.entry_type === 'charge' ? 'Charge' : 'Payment'}</span>
-                        {row.ledger.description || (row.ledger.entry_type === 'charge' ? 'Charge' : 'Payment')}
+                        <span
+                          className={`mr-1.5 rounded px-1.5 py-0.5 text-[10px] font-medium uppercase ${
+                            row.ledger.entry_type === 'discount' ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-500'
+                          }`}
+                        >
+                          {LEDGER_LABELS[row.ledger.entry_type]}
+                        </span>
+                        {row.ledger.description || LEDGER_LABELS[row.ledger.entry_type]}
                       </p>
                       <p className="text-xs text-slate-400">
                         {formatDateTime(row.ledger.occurred_at)} {row.ledger.payment_method ? `· ${PAYMENT_METHOD_LABELS[row.ledger.payment_method]}` : ''}
                       </p>
                     </div>
                     <div className="flex shrink-0 items-center gap-3">
-                      <p className={row.ledger.entry_type === 'charge' ? 'font-medium text-navy-900' : 'font-medium text-green-600'}>+{money(Number(row.ledger.amount))}</p>
+                      <p
+                        className={
+                          row.ledger.entry_type === 'charge'
+                            ? 'font-medium text-navy-900'
+                            : row.ledger.entry_type === 'discount'
+                            ? 'font-medium text-amber-600'
+                            : 'font-medium text-green-600'
+                        }
+                      >
+                        {row.ledger.entry_type === 'discount' ? '−' : '+'}
+                        {money(Number(row.ledger.amount))}
+                      </p>
                       <button onClick={() => setEditingLedgerId(row.ledger.id)} className="text-xs font-medium text-navy-700 hover:underline">
                         Edit
                       </button>

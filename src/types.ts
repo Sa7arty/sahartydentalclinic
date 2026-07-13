@@ -438,7 +438,7 @@ export interface PatientPhoto {
   created_at: string
 }
 
-export type LedgerEntryType = 'charge' | 'payment'
+export type LedgerEntryType = 'charge' | 'payment' | 'discount'
 export type PaymentMethod = 'cash' | 'card' | 'transfer' | 'other' | 'mobile_wallet'
 
 export const PAYMENT_METHOD_LABELS: Record<PaymentMethod, string> = {

@@ -8,7 +8,7 @@ create extension if not exists "pgcrypto";
 -- ---------- Enums ----------
 create type public.app_role as enum ('dentist', 'front_desk');
 create type public.visit_status as enum ('unconfirmed', 'confirmed', 'missed', 'cancelled');
-create type public.ledger_entry_type as enum ('charge', 'payment');
+create type public.ledger_entry_type as enum ('charge', 'payment', 'discount');
 create type public.payment_method as enum ('cash', 'card', 'transfer', 'other', 'mobile_wallet');
 create type public.gender_type as enum ('male', 'female');
 create type public.tooth_status as enum (
