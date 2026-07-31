@@ -160,6 +160,9 @@ export interface AppSettings {
   weekly_off_day: number
   late_grace_minutes: number
   patients_per_page: number
+  expense_category_required: boolean
+  expense_item_required: boolean
+  expense_description_required: boolean
 }
 
 /** Round a value to the nearest `increment` (0 or 1 = no rounding). */
@@ -381,6 +384,7 @@ export interface Expense {
   occurred_at: string
   description: string
   category: string | null
+  item: string | null
   amount: number
   payment_method: PaymentMethod | null
   expense_type: ExpenseType
@@ -880,6 +884,14 @@ export interface ExpenseCategory {
   id: string
   name: string
   active: boolean
+}
+
+export interface ExpenseItem {
+  id: string
+  category_id: string
+  name: string
+  active: boolean
+  position: number
 }
 
 export interface InventoryCluster {

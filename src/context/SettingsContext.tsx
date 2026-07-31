@@ -29,6 +29,9 @@ const defaultSettings: AppSettings = {
   weekly_off_day: 5,
   late_grace_minutes: 0,
   patients_per_page: 25,
+  expense_category_required: false,
+  expense_item_required: false,
+  expense_description_required: true,
 }
 
 const SettingsContext = createContext<SettingsContextValue | undefined>(undefined)
@@ -61,6 +64,9 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
         weekly_off_day: data.weekly_off_day ?? 5,
         late_grace_minutes: data.late_grace_minutes ?? 0,
         patients_per_page: data.patients_per_page ?? 25,
+        expense_category_required: data.expense_category_required ?? false,
+        expense_item_required: data.expense_item_required ?? false,
+        expense_description_required: data.expense_description_required ?? true,
       })
     }
     setLoading(false)

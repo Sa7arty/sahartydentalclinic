@@ -24,6 +24,7 @@ import {
   telHref,
   whatsappHref,
   ExpenseCategory,
+  ExpenseItem,
 } from '../types'
 import { toYmd, fromYmd, startOfWeek, formatDate, formatDateTime, toDatetimeLocal } from '../lib/dates'
 import { exportOutstandingBalancesPdf } from '../lib/pdf'
@@ -140,6 +141,8 @@ export default function Balance() {
   const [expenses, setExpenses] = useState<ExpenseRow[]>([])
   const [recurring, setRecurring] = useState<RecurringExpense[]>([])
   const [categories, setCategories] = useState<ExpenseCategory[]>([])
+  const [items, setItems] = useState<ExpenseItem[]>([])
+  const [addCategory, setAddCategory] = useState('') // selected category name in the add-expense form
   const [editingExpenseId, setEditingExpenseId] = useState<string | null>(null)
   const [editingMiscId, setEditingMiscId] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
@@ -205,6 +208,7 @@ export default function Balance() {
     await supabase.rpc('generate_due_recurring_expenses')
     supabase.from('recurring_expenses').select('*').eq('active', true).order('next_run_date').then(({ data }) => setRecurring((data as RecurringExpense[]) ?? []))
     supabase.from('expense_categories').select('*').eq('active', true).order('name').then(({ data }) => setCategories((data as ExpenseCategory[]) ?? []))
+    supabase.from('expense_items').select('*').eq('active', true).order('name').then(({ data }) => setItems((data as ExpenseItem[]) ?? []))
     const { from, to } = periodRange(period, settings.week_start_day, customFrom, customTo)
     if (period === 'custom' && (!from || !to)) {
       setIncome([])
@@ -245,6 +249,12 @@ export default function Balance() {
     const form = new FormData(e.currentTarget)
     const occurredAt = form.get('occurred_at')
     const occurred = occurredAt ? new Date(occurredAt as string) : new Date()
+    const categoryVal = (form.get('category') as string) || ''
+    const itemVal = (form.get('item') as string) || ''
+    const descVal = ((form.get('description') as string) || '').trim()
+    if (settings.expense_category_required && !categoryVal) return alert('Please choose a category.')
+    if (settings.expense_item_required && !itemVal) return alert('Please choose an item.')
+    if (settings.expense_description_required && !descVal) return alert('Please enter a description.')
 
     if (makeRecurring) {
       // Create a template; the generation function then materializes the first (and any due) occurrences.
@@ -252,7 +262,8 @@ export default function Balance() {
       const startDate = occurred.toISOString().slice(0, 10)
       const { error } = await supabase.from('recurring_expenses').insert({
         description: form.get('description'),
-        category: form.get('category') || null,
+        category: categoryVal || null,
+        item: itemVal || null,
         amount: form.get('amount'),
         payment_method: form.get('payment_method') || null,
         interval_unit: preset.unit,
@@ -272,7 +283,8 @@ export default function Balance() {
     } else {
       const { error } = await supabase.from('expenses').insert({
         description: form.get('description'),
-        category: form.get('category') || null,
+        category: categoryVal || null,
+        item: itemVal || null,
         amount: form.get('amount'),
         payment_method: form.get('payment_method') || null,
         expense_type: 'general',
@@ -286,6 +298,7 @@ export default function Balance() {
       }
     }
     e.currentTarget.reset()
+    setAddCategory('')
     setMakeRecurring(false)
     load()
   }
@@ -306,6 +319,7 @@ export default function Balance() {
       .update({
         description: form.get('description'),
         category: form.get('category') || null,
+        item: form.get('item') || null,
         amount: form.get('amount'),
         payment_method: form.get('payment_method') || null,
         occurred_at: occurredAt ? new Date(occurredAt as string).toISOString() : undefined,
@@ -607,15 +621,25 @@ export default function Balance() {
           </div>
 
           <form onSubmit={handleAddExpense} className="grid gap-3 rounded-xl border border-slate-200 bg-white p-4 sm:grid-cols-2">
-            <input name="description" required placeholder="Description (e.g. Dental supplies)" className="rounded-lg border border-slate-300 px-3 py-2 text-sm" />
-            <select name="category" defaultValue="" className="rounded-lg border border-slate-300 px-3 py-2 text-sm">
-              <option value="">Category (optional)</option>
+            <select name="category" value={addCategory} onChange={(e) => setAddCategory(e.target.value)} className="rounded-lg border border-slate-300 px-3 py-2 text-sm">
+              <option value="">Category{settings.expense_category_required ? ' *' : ' (optional)'}</option>
               {categories.map((c) => (
                 <option key={c.id} value={c.name}>
                   {c.name}
                 </option>
               ))}
             </select>
+            <select name="item" defaultValue="" disabled={!addCategory} className="rounded-lg border border-slate-300 px-3 py-2 text-sm disabled:bg-slate-50 disabled:text-slate-400">
+              <option value="">{addCategory ? `Item${settings.expense_item_required ? ' *' : ' (optional)'}` : 'Item — pick a category first'}</option>
+              {items
+                .filter((i) => i.category_id === categories.find((c) => c.name === addCategory)?.id)
+                .map((i) => (
+                  <option key={i.id} value={i.name}>
+                    {i.name}
+                  </option>
+                ))}
+            </select>
+            <input name="description" placeholder={`Description${settings.expense_description_required ? ' *' : ' (optional)'}`} className="rounded-lg border border-slate-300 px-3 py-2 text-sm sm:col-span-2" />
             <input name="amount" type="number" step="0.01" min="0" required placeholder={`Amount (${settings.currency})`} className="rounded-lg border border-slate-300 px-3 py-2 text-sm" />
             <select name="payment_method" className="rounded-lg border border-slate-300 px-3 py-2 text-sm">
               {PAYMENT_METHODS.map((m) => (
@@ -709,6 +733,17 @@ export default function Balance() {
                         </option>
                       ))}
                     </select>
+                    <select name="item" defaultValue={e.item ?? ''} className="rounded-lg border border-slate-300 px-3 py-2 text-sm">
+                      <option value="">No item</option>
+                      {e.item && !items.some((i) => i.name === e.item) && <option value={e.item}>{e.item}</option>}
+                      {items
+                        .filter((i) => i.category_id === categories.find((c) => c.name === e.category)?.id)
+                        .map((i) => (
+                          <option key={i.id} value={i.name}>
+                            {i.name}
+                          </option>
+                        ))}
+                    </select>
                     <select name="payment_method" defaultValue={e.payment_method ?? 'cash'} className="rounded-lg border border-slate-300 px-3 py-2 text-sm">
                       {PAYMENT_METHODS.map((m) => (
                         <option key={m} value={m}>
@@ -735,6 +770,8 @@ export default function Balance() {
                     </p>
                     <p className="text-xs text-slate-400">
                       {formatDateTime(e.occurred_at)} · {EXPENSE_TYPE_LABELS[e.expense_type]}
+                      {e.category ? ` · ${e.category}` : ''}
+                      {e.item ? ` › ${e.item}` : ''}
                       {e.provider ? ` · ${providerFullName(e.provider)}` : ''}
                       {e.payment_method ? ` · ${PAYMENT_METHOD_LABELS[e.payment_method]}` : ''}
                     </p>
