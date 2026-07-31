@@ -107,6 +107,7 @@ interface AuditProfile {
 export interface Patient {
   id: string
   file_number: string | null
+  title: string | null
   first_name: string
   middle_name: string | null
   last_name: string
@@ -158,6 +159,7 @@ export interface AppSettings {
   salary_rounding: number
   weekly_off_day: number
   late_grace_minutes: number
+  patients_per_page: number
 }
 
 /** Round a value to the nearest `increment` (0 or 1 = no rounding). */
@@ -228,8 +230,12 @@ export const DENTAL_SPECIALTIES: string[] = [
   'Special Needs Dentistry',
 ]
 
+/** Common patient titles offered (as suggestions) on the patient form; free text is allowed. */
+export const PATIENT_TITLES: string[] = ['Dr', 'Prof', 'Eng', 'Mr', 'Mrs', 'Ms', 'Miss']
+
 /** Fields a dentist can mark mandatory on the new-patient form. */
 export const REQUIRABLE_PATIENT_FIELDS: { key: string; label: string }[] = [
+  { key: 'title', label: 'Title (Dr / Mr / …)' },
   { key: 'first_name', label: 'First name' },
   { key: 'middle_name', label: 'Middle name' },
   { key: 'last_name', label: 'Last name' },
@@ -251,8 +257,8 @@ export const REQUIRABLE_PATIENT_FIELDS: { key: string; label: string }[] = [
   { key: 'notes', label: 'Notes' },
 ]
 
-export function patientFullName(p: Pick<Patient, 'first_name' | 'middle_name' | 'last_name'>): string {
-  return [p.first_name, p.middle_name, p.last_name].filter(Boolean).join(' ')
+export function patientFullName(p: Pick<Patient, 'first_name' | 'middle_name' | 'last_name'> & { title?: string | null }): string {
+  return [p.title, p.first_name, p.middle_name, p.last_name].filter(Boolean).join(' ')
 }
 
 /** Age is always derived from date_of_birth + today, never stored. */
@@ -656,6 +662,8 @@ export function isFridayDate(ymd: string): boolean {
 
 export type DeductionKind = 'deduction' | 'loan'
 
+export type DeductionUnit = 'amount' | 'work_days'
+
 export interface EmployeeDeduction {
   id: string
   employee_id: string
@@ -665,6 +673,8 @@ export interface EmployeeDeduction {
   total_amount: number
   per_installment: number
   amount_settled: number
+  deduction_unit: DeductionUnit
+  work_days: number | null
   active: boolean
   created_at: string
 }
@@ -849,6 +859,12 @@ export interface Inventory {
   id: string
   name: string
   position: number
+}
+
+export interface ExpenseCategory {
+  id: string
+  name: string
+  active: boolean
 }
 
 export interface InventoryCluster {

@@ -1,5 +1,5 @@
 import { FormEvent, ReactNode, useState } from 'react'
-import { Location, Provider, Patient, PatientGroup, providerFullName, MARITAL_STATUS_OPTIONS } from '../types'
+import { Location, Provider, Patient, PatientGroup, providerFullName, MARITAL_STATUS_OPTIONS, PATIENT_TITLES } from '../types'
 import { useAuth } from '../context/AuthContext'
 import { useSettings } from '../context/SettingsContext'
 import { WORLD_COUNTRIES } from '../data/countries'
@@ -48,6 +48,7 @@ export default function PatientForm({ initial, locations, providers, groups, onC
     // Single-clinic app: default every patient to the clinic location automatically.
     const clinicLocation = initial?.primary_location_id ?? locationIds[0] ?? locations[0]?.id
     const payload: Record<string, unknown> = {
+      title: form.get('title') || null,
       first_name: form.get('first_name'),
       middle_name: form.get('middle_name') || null,
       last_name: form.get('last_name'),
@@ -86,6 +87,14 @@ export default function PatientForm({ initial, locations, providers, groups, onC
         </Field>
       )}
 
+      <Field label="Title" required={req('title')}>
+        <input name="title" list="title-options" required={req('title')} defaultValue={initial?.title ?? ''} placeholder="e.g. Dr, Mr, Eng" className={inputClass} />
+        <datalist id="title-options">
+          {PATIENT_TITLES.map((t) => (
+            <option key={t} value={t} />
+          ))}
+        </datalist>
+      </Field>
       <Field label="First name" required={req('first_name')}>
         <input name="first_name" required={req('first_name')} defaultValue={initial?.first_name ?? ''} className={inputClass} />
       </Field>

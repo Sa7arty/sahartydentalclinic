@@ -239,6 +239,7 @@ export default function Inventory() {
         <div className="space-y-5">
           <p className="text-xs text-slate-500">
             Counting for <span className="font-medium text-navy-800">{monthLabel}</span>. Enter what you currently have of each item; the app works out how many to buy.
+            {' '}<span className="rounded bg-amber-50 px-1 text-amber-700">Amber rows</span> are below target (need restocking).
           </p>
 
           {clusters.map((cluster, ci) => (
@@ -302,7 +303,7 @@ export default function Inventory() {
                         </td>
                       </tr>
                     ) : (
-                      <tr key={item.id} className="border-t border-slate-100">
+                      <tr key={item.id} className={`border-t border-slate-100 ${needToBuy(item.original_quantity, counts[item.id]?.current_quantity ?? null) > 0 ? 'bg-amber-50' : ''}`}>
                         <td className="px-3 py-1.5 text-navy-900">{item.name}</td>
                         <td className="px-3 py-1.5 text-slate-500">{item.brand || '—'}</td>
                         <td className="px-3 py-1.5 text-center text-slate-500">{Number(item.original_quantity)}</td>

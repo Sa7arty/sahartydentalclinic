@@ -26,6 +26,7 @@ import {
   daysUntil,
   EmployeeDeduction,
   DeductionKind,
+  DeductionUnit,
   DeductionPayment,
   DEDUCTION_PAYMENT_LABELS,
   PayrollRun,
@@ -35,9 +36,9 @@ import {
   AppSettings,
 } from '../types'
 import { formatDate, toYmd } from '../lib/dates'
-import { exportPayslipPdf } from '../lib/pdf'
+import { exportPayslipPdf, exportStaffSummaryPdf } from '../lib/pdf'
 
-type HrTab = 'employees' | 'attendance' | 'leave' | 'deductions' | 'payroll'
+type HrTab = 'employees' | 'attendance' | 'leave' | 'deductions' | 'payroll' | 'summary'
 
 const card = 'space-y-3 rounded-xl border border-slate-200 bg-white p-4'
 
@@ -67,6 +68,7 @@ export default function HR() {
     { key: 'leave', label: 'Leave' },
     { key: 'deductions', label: 'Deductions & loans' },
     { key: 'payroll', label: 'Payroll' },
+    { key: 'summary', label: 'Summary' },
   ]
 
   return (
@@ -97,6 +99,8 @@ export default function HR() {
         <LeaveTab employees={employees} settings={settings} />
       ) : tab === 'deductions' ? (
         <DeductionsTab employees={employees} settings={settings} />
+      ) : tab === 'summary' ? (
+        <SummaryTab employees={employees} settings={settings} />
       ) : (
         <PayrollTab employees={employees} settings={settings} onChanged={loadEmployees} />
       )}
@@ -444,15 +448,7 @@ function AttendanceTab({ employees, settings }: { employees: Employee[]; setting
     setLeaveDates(s)
   }
 
-  /** A row is "late" only for a fixed-shift employee who checked in more than the grace period after shift start. */
-  function isLate(r: EmployeeAttendance): boolean {
-    if (!employee?.shift_start || !r.check_in) return false
-    const toMin = (t: string) => {
-      const [h, m] = t.split(':').map(Number)
-      return h * 60 + m
-    }
-    return toMin(r.check_in) > toMin(employee.shift_start) + settings.late_grace_minutes
-  }
+  const isLate = (r: EmployeeAttendance): boolean => (employee ? isLateRow(employee, r, settings) : false)
 
   async function handleSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault()
@@ -664,6 +660,101 @@ function computeLeave(leaves: EmployeeLeave[], annualLeaveDays: number) {
     }
   }
   return { statusByDate, usedByYear }
+}
+
+/** A day is "late" only for a fixed-shift employee who checked in more than the grace period after shift start. */
+function isLateRow(emp: Employee, r: Pick<EmployeeAttendance, 'check_in'>, settings: AppSettings): boolean {
+  if (!emp.shift_start || !r.check_in) return false
+  const toMin = (t: string) => {
+    const [h, m] = t.split(':').map(Number)
+    return h * 60 + m
+  }
+  return toMin(r.check_in) > toMin(emp.shift_start) + settings.late_grace_minutes
+}
+
+/**
+ * Compute one employee's payslip for a salary month. Shared by the Payroll tab and the Summary tab
+ * so both always agree. `attendance` may contain rows for any employee across both periods — it is
+ * filtered here. Base pay is pro-rated by attendance; overtime and profit-share are earned in the
+ * previous period (bonuses lag one month); deductions/loan installments due this month are recovered.
+ */
+function buildPayslip(
+  emp: Employee,
+  attendance: EmployeeAttendance[],
+  allLeave: EmployeeLeave[],
+  allDeductions: EmployeeDeduction[],
+  perEmployee: number,
+  settings: AppSettings,
+  bounds: { curStart: string; curEnd: string; prevStart: string; prevEnd: string; payDateYmd: string },
+): Payslip {
+  const { curStart, curEnd, prevStart, prevEnd, payDateYmd } = bounds
+  const mult = Number(settings.overtime_midnight_multiplier)
+  const rules = otRules(emp, settings)
+  const curRows = attendance.filter((a) => a.employee_id === emp.id && a.work_date >= curStart && a.work_date <= curEnd)
+  const prevRows = attendance.filter((a) => a.employee_id === emp.id && a.work_date >= prevStart && a.work_date <= prevEnd)
+  // Fridays are the weekly day off — attending doesn't count as a work day (all its hours are overtime).
+  const attendedDays = curRows.filter((r) => !isWeeklyOffDate(r.work_date, settings.weekly_off_day)).length
+  const attendedSet = new Set(curRows.map((r) => r.work_date))
+
+  const { statusByDate } = computeLeave(allLeave.filter((l) => l.employee_id === emp.id), emp.annual_leave_days)
+  let paidLeaveDays = 0
+  let unpaidLeaveDays = 0
+  for (const [date, info] of statusByDate) {
+    if (date < curStart || date > curEnd || attendedSet.has(date)) continue
+    if (info.status === 'paid') paidLeaveDays++
+    else unpaidLeaveDays++
+  }
+
+  const perDayValue = emp.expected_work_days > 0 ? Number(emp.base_salary) / emp.expected_work_days : 0
+  const paidDays = Math.min(attendedDays + paidLeaveDays, emp.expected_work_days)
+  const regularPay = paidDays * perDayValue
+  const deductionDays = Math.max(0, emp.expected_work_days - paidDays)
+
+  let otHoursPrev = 0
+  let otMidnightPrev = 0
+  let overtimePayPrev = 0
+  for (const r of prevRows) {
+    const o = overtimeForDay(r, rules)
+    otHoursPrev += o.otBeforeMidnight + o.otAfterMidnight
+    otMidnightPrev += o.otAfterMidnight
+    overtimePayPrev += o.otBeforeMidnight * Number(emp.overtime_hourly_rate) + o.otAfterMidnight * Number(emp.overtime_hourly_rate) * mult
+  }
+  const profitSharePrev = perEmployee
+  const gross = regularPay + overtimePayPrev + profitSharePrev
+
+  const deductions = allDeductions
+    .filter((d) => d.employee_id === emp.id && (!d.start_date || d.start_date <= payDateYmd))
+    .map((d) => ({
+      id: d.id,
+      description: d.description || (d.kind === 'loan' ? 'Loan repayment' : 'Deduction'),
+      amount: Math.min(Number(d.per_installment), Number(d.total_amount) - Number(d.amount_settled)),
+      kind: d.kind,
+    }))
+    .filter((d) => d.amount > 0)
+  const deductionsTotal = deductions.reduce((s, d) => s + d.amount, 0)
+
+  const afterDeductions = gross - deductionsTotal
+  const total = roundTo(afterDeductions, settings.salary_rounding)
+  const roundingAdj = total - afterDeductions
+
+  return {
+    employee: emp,
+    attendedDays,
+    paidLeaveDays,
+    unpaidLeaveDays,
+    deductionDays,
+    perDayValue,
+    regularPay,
+    overtimeHoursPrev: otHoursPrev,
+    overtimeMidnightHoursPrev: otMidnightPrev,
+    overtimePayPrev,
+    profitSharePrev,
+    gross,
+    deductions,
+    deductionsTotal,
+    roundingAdj,
+    total,
+  }
 }
 
 // ============================================================
@@ -885,11 +976,14 @@ function DeductionsTab({ employees, settings }: { employees: Employee[]; setting
   const [items, setItems] = useState<EmployeeDeduction[]>([])
   const [payments, setPayments] = useState<DeductionPayment[]>([])
   const [kind, setKind] = useState<DeductionKind>('deduction')
+  const [unit, setUnit] = useState<DeductionUnit>('amount')
   const [recordExpense, setRecordExpense] = useState(true)
   const [payingId, setPayingId] = useState<string | null>(null)
 
   const employee = employees.find((e) => e.id === employeeId)
   const money = (n: number) => formatMoney(n, settings)
+  // Worth of one working day for the selected employee (base salary ÷ expected work-days per month).
+  const dayValue = employee && employee.expected_work_days > 0 ? Number(employee.base_salary) / employee.expected_work_days : 0
 
   useEffect(() => {
     if (employeeId) load()
@@ -911,9 +1005,21 @@ function DeductionsTab({ employees, settings }: { employees: Employee[]; setting
   async function handleAdd(e: FormEvent<HTMLFormElement>) {
     e.preventDefault()
     const f = new FormData(e.currentTarget)
-    const total = Number(f.get('total_amount'))
-    const per = Number(f.get('per_installment'))
-    if (!(total > 0) || !(per > 0)) return alert('Enter a total amount and a monthly installment (both greater than 0).')
+    const useDays = kind === 'deduction' && unit === 'work_days'
+    let total: number
+    let per: number
+    let workDays: number | null = null
+    if (useDays) {
+      workDays = Number(f.get('work_days'))
+      if (!(workDays > 0)) return alert('Enter the number of working days to deduct (greater than 0).')
+      if (!(dayValue > 0)) return alert('This employee has no base salary / expected work-days set, so a day value cannot be calculated.')
+      total = workDays * dayValue
+      per = total // a work-day penalty is taken from the next salary in one go
+    } else {
+      total = Number(f.get('total_amount'))
+      per = Number(f.get('per_installment'))
+      if (!(total > 0) || !(per > 0)) return alert('Enter a total amount and a monthly installment (both greater than 0).')
+    }
     const startDate = (f.get('start_date') as string) || toYmd(new Date())
     const { error } = await supabase.from('employee_deductions').insert({
       employee_id: employeeId,
@@ -922,6 +1028,8 @@ function DeductionsTab({ employees, settings }: { employees: Employee[]; setting
       start_date: startDate,
       total_amount: total,
       per_installment: per,
+      deduction_unit: useDays ? 'work_days' : 'amount',
+      work_days: workDays,
       created_by: session?.user.id,
     })
     if (error) return alert(error.message)
@@ -1025,20 +1133,45 @@ function DeductionsTab({ employees, settings }: { employees: Employee[]; setting
                 <input type="radio" checked={kind === 'loan'} onChange={() => setKind('loan')} /> Loan (money given now)
               </label>
             </div>
+
+            {kind === 'deduction' && (
+              <div className="flex flex-wrap gap-4 text-sm text-navy-800">
+                <span className="text-xs text-slate-400">Deduct by:</span>
+                <label className="flex items-center gap-1.5">
+                  <input type="radio" checked={unit === 'amount'} onChange={() => setUnit('amount')} /> Amount
+                </label>
+                <label className="flex items-center gap-1.5">
+                  <input type="radio" checked={unit === 'work_days'} onChange={() => setUnit('work_days')} /> Working days
+                </label>
+              </div>
+            )}
+
             <div className="grid gap-3 sm:grid-cols-4">
               <input name="description" placeholder="Reason / description" className="rounded-lg border border-slate-300 px-3 py-2 text-sm sm:col-span-2" />
               <div>
                 <label className="mb-1 block text-[11px] text-slate-400">{kind === 'loan' ? 'Date of loan' : 'Date of deduction'}</label>
                 <input name="start_date" type="date" defaultValue={toYmd(new Date())} className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
               </div>
-              <div>
-                <label className="mb-1 block text-[11px] text-slate-400">Total amount ({settings.currency})</label>
-                <input name="total_amount" type="number" step="0.01" min="0" required className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
-              </div>
-              <div>
-                <label className="mb-1 block text-[11px] text-slate-400">Deduct per month ({settings.currency})</label>
-                <input name="per_installment" type="number" step="0.01" min="0" required className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
-              </div>
+              {kind === 'deduction' && unit === 'work_days' ? (
+                <div className="sm:col-span-2">
+                  <label className="mb-1 block text-[11px] text-slate-400">Number of working days</label>
+                  <input name="work_days" type="number" step="0.5" min="0" required className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+                  <p className="mt-1 text-[11px] text-slate-500">
+                    One working day = {money(dayValue)} (base ÷ {employee.expected_work_days} work-days). Taken from the next salary in full.
+                  </p>
+                </div>
+              ) : (
+                <>
+                  <div>
+                    <label className="mb-1 block text-[11px] text-slate-400">Total amount ({settings.currency})</label>
+                    <input name="total_amount" type="number" step="0.01" min="0" required className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-[11px] text-slate-400">Deduct per month ({settings.currency})</label>
+                    <input name="per_installment" type="number" step="0.01" min="0" required className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+                  </div>
+                </>
+              )}
             </div>
             {kind === 'loan' && (
               <label className="flex items-center gap-2 text-xs text-navy-800">
@@ -1065,6 +1198,7 @@ function DeductionsTab({ employees, settings }: { employees: Employee[]; setting
                     <div>
                       <p className="font-medium text-navy-900">
                         {d.kind === 'loan' ? 'Loan' : 'Deduction'}
+                        {d.deduction_unit === 'work_days' && d.work_days ? ` · ${d.work_days} work day${d.work_days === 1 ? '' : 's'}` : ''}
                         {d.description ? ` · ${d.description}` : ''}{' '}
                         {d.active ? (
                           <span className="ml-1 rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700">Active</span>
@@ -1236,81 +1370,8 @@ function PayrollTab({ employees, settings, onChanged }: { employees: Employee[];
     const perEmployee = activeEmployees.length > 0 ? pool / activeEmployees.length : 0
     setPoolInfo({ netPrev, pool, perEmployee })
 
-    const rules = (emp: Employee) => otRules(emp, settings)
-    const mult = Number(settings.overtime_midnight_multiplier)
-
-    const result: Payslip[] = activeEmployees.map((emp) => {
-      const curRows = attendance.filter((a) => a.employee_id === emp.id && a.work_date >= curStart && a.work_date <= curEnd)
-      const prevRows = attendance.filter((a) => a.employee_id === emp.id && a.work_date >= prevStart && a.work_date <= prevEnd)
-      // Fridays are the weekly day off — attending doesn't count as a work day (all its hours are overtime).
-      const attendedDays = curRows.filter((r) => !isWeeklyOffDate(r.work_date, settings.weekly_off_day)).length
-      const attendedSet = new Set(curRows.map((r) => r.work_date))
-
-      // Leave / granted days off falling in the current period (an attended day is not leave).
-      const { statusByDate } = computeLeave(allLeave.filter((l) => l.employee_id === emp.id), emp.annual_leave_days)
-      let paidLeaveDays = 0
-      let unpaidLeaveDays = 0
-      for (const [date, info] of statusByDate) {
-        if (date < curStart || date > curEnd || attendedSet.has(date)) continue
-        if (info.status === 'paid') paidLeaveDays++ // includes granted days off (kind === 'day_off')
-        else unpaidLeaveDays++
-      }
-
-      const perDayValue = emp.expected_work_days > 0 ? Number(emp.base_salary) / emp.expected_work_days : 0
-      const paidDays = Math.min(attendedDays + paidLeaveDays, emp.expected_work_days)
-      const regularPay = paidDays * perDayValue
-      const deductionDays = Math.max(0, emp.expected_work_days - paidDays)
-
-      // Overtime is earned in the previous period (bonuses lag one month). After-midnight hours pay at the multiplier.
-      let otHoursPrev = 0
-      let otMidnightPrev = 0
-      let overtimePayPrev = 0
-      for (const r of prevRows) {
-        const o = overtimeForDay(r, rules(emp))
-        otHoursPrev += o.otBeforeMidnight + o.otAfterMidnight
-        otMidnightPrev += o.otAfterMidnight
-        overtimePayPrev += o.otBeforeMidnight * Number(emp.overtime_hourly_rate) + o.otAfterMidnight * Number(emp.overtime_hourly_rate) * mult
-      }
-      const profitSharePrev = perEmployee
-      const gross = regularPay + overtimePayPrev + profitSharePrev
-
-      // Deductions / loan installments due this month (projected: min(installment, remaining)).
-      // Only applies once the pay date reaches the deduction's start date (starts from the next salary).
-      const payDateYmd = toYmd(payDate)
-      const deductions = allDeductions
-        .filter((d) => d.employee_id === emp.id && (!d.start_date || d.start_date <= payDateYmd))
-        .map((d) => ({
-          id: d.id,
-          description: d.description || (d.kind === 'loan' ? 'Loan repayment' : 'Deduction'),
-          amount: Math.min(Number(d.per_installment), Number(d.total_amount) - Number(d.amount_settled)),
-          kind: d.kind,
-        }))
-        .filter((d) => d.amount > 0)
-      const deductionsTotal = deductions.reduce((s, d) => s + d.amount, 0)
-
-      const afterDeductions = gross - deductionsTotal
-      const total = roundTo(afterDeductions, settings.salary_rounding)
-      const roundingAdj = total - afterDeductions
-
-      return {
-        employee: emp,
-        attendedDays,
-        paidLeaveDays,
-        unpaidLeaveDays,
-        deductionDays,
-        perDayValue,
-        regularPay,
-        overtimeHoursPrev: otHoursPrev,
-        overtimeMidnightHoursPrev: otMidnightPrev,
-        overtimePayPrev,
-        profitSharePrev,
-        gross,
-        deductions,
-        deductionsTotal,
-        roundingAdj,
-        total,
-      }
-    })
+    const bounds = { curStart, curEnd, prevStart, prevEnd, payDateYmd: toYmd(payDate) }
+    const result: Payslip[] = activeEmployees.map((emp) => buildPayslip(emp, attendance, allLeave, allDeductions, perEmployee, settings, bounds))
     setSlips(result)
     setLoading(false)
   }
@@ -1654,6 +1715,203 @@ function PayrollTab({ employees, settings, onChanged }: { employees: Employee[];
           </div>
         </div>
       )}
+    </div>
+  )
+}
+
+// ============================================================
+// Summary tab — all staff, one month at a glance (attendance + pay)
+// ============================================================
+type SummaryRow = {
+  emp: Employee
+  present: number
+  hours: number
+  overtime: number
+  late: number
+  paidLeave: number
+  absent: number
+  netPay: number
+}
+
+function SummaryTab({ employees, settings }: { employees: Employee[]; settings: AppSettings }) {
+  const [month, setMonth] = useState(() => toYmd(new Date()).slice(0, 7))
+  const [rows, setRows] = useState<SummaryRow[]>([])
+  const [loading, setLoading] = useState(false)
+
+  const payMonth = useMemo(() => new Date(Number(month.slice(0, 4)), Number(month.slice(5, 7)) - 1, 15), [month])
+  const curPeriod = useMemo(() => salaryPeriodFor(payMonth, settings.salary_period_start_day), [payMonth, settings.salary_period_start_day])
+  const prevPayMonth = useMemo(() => new Date(payMonth.getFullYear(), payMonth.getMonth() - 1, 15), [payMonth])
+  const prevPeriod = useMemo(() => salaryPeriodFor(prevPayMonth, settings.salary_period_start_day), [prevPayMonth, settings.salary_period_start_day])
+  const payDate = new Date(payMonth.getFullYear(), payMonth.getMonth(), settings.salary_pay_day)
+  const activeEmployees = useMemo(() => employees.filter((e) => e.active), [employees])
+  const monthLabel = payMonth.toLocaleString('en', { month: 'long', year: 'numeric' })
+  const money = (n: number) => formatMoney(n, settings)
+
+  useEffect(() => {
+    compute()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [month, employees])
+
+  async function compute() {
+    setLoading(true)
+    const curStart = toYmd(curPeriod.start)
+    const curEnd = toYmd(curPeriod.end)
+    const prevStart = toYmd(prevPeriod.start)
+    const prevEnd = toYmd(prevPeriod.end)
+
+    const [{ data: att }, { data: lv }, { data: ded }] = await Promise.all([
+      supabase.from('employee_attendance').select('*').gte('work_date', prevStart).lte('work_date', curEnd),
+      supabase.from('employee_leave').select('*').eq('status', 'approved'),
+      supabase.from('employee_deductions').select('*').eq('active', true),
+    ])
+    const attendance = (att as EmployeeAttendance[]) ?? []
+    const allLeave = (lv as EmployeeLeave[]) ?? []
+    const allDeductions = (ded as EmployeeDeduction[]) ?? []
+
+    // Profit-share pool comes from the previous period's net profit (bonuses lag one month).
+    const prevStartIso = new Date(`${prevStart}T00:00:00`).toISOString()
+    const prevEndIso = new Date(`${prevEnd}T23:59:59`).toISOString()
+    const [{ data: pays }, { data: exps }, { data: misc }] = await Promise.all([
+      supabase.from('ledger_entries').select('amount').eq('entry_type', 'payment').gte('occurred_at', prevStartIso).lte('occurred_at', prevEndIso),
+      supabase.from('expenses').select('amount').gte('occurred_at', prevStartIso).lte('occurred_at', prevEndIso),
+      supabase.from('misc_income').select('amount').gte('occurred_at', prevStartIso).lte('occurred_at', prevEndIso),
+    ])
+    const netPrev =
+      (pays ?? []).reduce((s, r: any) => s + Number(r.amount), 0) +
+      (misc ?? []).reduce((s, r: any) => s + Number(r.amount), 0) -
+      (exps ?? []).reduce((s, r: any) => s + Number(r.amount), 0)
+    const pool = Math.max(0, netPrev) * (settings.profit_share_percent / 100)
+    const perEmployee = activeEmployees.length > 0 ? pool / activeEmployees.length : 0
+
+    const bounds = { curStart, curEnd, prevStart, prevEnd, payDateYmd: toYmd(payDate) }
+    const todayYmd = toYmd(new Date())
+
+    const result: SummaryRow[] = activeEmployees.map((emp) => {
+      const curRows = attendance.filter((a) => a.employee_id === emp.id && a.work_date >= curStart && a.work_date <= curEnd)
+      const rules = otRules(emp, settings)
+      const hours = curRows.reduce((s, r) => s + attendanceHours(r), 0)
+      const overtime = curRows.reduce((s, r) => {
+        const o = overtimeForDay(r, rules)
+        return s + o.otBeforeMidnight + o.otAfterMidnight
+      }, 0)
+      const present = curRows.filter((r) => !isWeeklyOffDate(r.work_date, settings.weekly_off_day)).length
+      const late = curRows.filter((r) => isLateRow(emp, r, settings)).length
+
+      const { statusByDate } = computeLeave(allLeave.filter((l) => l.employee_id === emp.id), emp.annual_leave_days)
+      const attendedSet = new Set(curRows.map((r) => r.work_date))
+      const leaveDates = new Set<string>()
+      let paidLeave = 0
+      for (const [date, info] of statusByDate) {
+        if (date < curStart || date > curEnd) continue
+        leaveDates.add(date)
+        if (!attendedSet.has(date) && info.status === 'paid') paidLeave++
+      }
+      // Absences so far: elapsed working days with no attendance and no approved leave.
+      const absent = eachDateInclusive(curStart, curEnd).filter(
+        (d) => d <= todayYmd && !isWeeklyOffDate(d, settings.weekly_off_day) && !attendedSet.has(d) && !leaveDates.has(d),
+      ).length
+
+      const slip = buildPayslip(emp, attendance, allLeave, allDeductions, perEmployee, settings, bounds)
+      return { emp, present, hours, overtime, late, paidLeave, absent, netPay: slip.total }
+    })
+    setRows(result)
+    setLoading(false)
+  }
+
+  const totals = rows.reduce(
+    (t, r) => ({
+      present: t.present + r.present,
+      hours: t.hours + r.hours,
+      overtime: t.overtime + r.overtime,
+      late: t.late + r.late,
+      paidLeave: t.paidLeave + r.paidLeave,
+      absent: t.absent + r.absent,
+      netPay: t.netPay + r.netPay,
+    }),
+    { present: 0, hours: 0, overtime: 0, late: 0, paidLeave: 0, absent: 0, netPay: 0 },
+  )
+
+  return (
+    <div className={card}>
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <label className="mb-1 block text-xs text-slate-500">Salary month</label>
+          <input type="month" value={month} onChange={(e) => setMonth(e.target.value)} className="rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+          <p className="mt-1 text-xs text-slate-500">
+            Attendance: {formatDate(curPeriod.start)} → {formatDate(curPeriod.end)}
+          </p>
+        </div>
+        <button
+          onClick={() =>
+            exportStaffSummaryPdf(
+              monthLabel,
+              settings.currency,
+              rows.map((r) => ({ name: employeeFullName(r.emp), present: r.present, hours: r.hours, overtime: r.overtime, late: r.late, paidLeave: r.paidLeave, absent: r.absent, netPay: r.netPay })),
+            )
+          }
+          disabled={rows.length === 0}
+          className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-navy-800 hover:bg-slate-50 disabled:opacity-40"
+        >
+          Export (PDF)
+        </button>
+      </div>
+
+      {loading ? (
+        <p className="text-sm text-slate-500">Loading…</p>
+      ) : rows.length === 0 ? (
+        <p className="text-sm text-slate-500">No active employees.</p>
+      ) : (
+        <div className="overflow-x-auto rounded-lg border border-slate-200">
+          <table className="w-full text-sm">
+            <thead className="bg-slate-50 text-left text-xs text-slate-500">
+              <tr>
+                <th className="px-3 py-2">Employee</th>
+                <th className="px-3 py-2 text-right">Present</th>
+                <th className="px-3 py-2 text-right">Hours</th>
+                <th className="px-3 py-2 text-right">Overtime</th>
+                <th className="px-3 py-2 text-right">Late</th>
+                <th className="px-3 py-2 text-right">Paid leave</th>
+                <th className="px-3 py-2 text-right">Absent</th>
+                <th className="px-3 py-2 text-right">Net pay</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r) => (
+                <tr key={r.emp.id} className="border-t border-slate-100">
+                  <td className="px-3 py-2 font-medium text-navy-900">
+                    {employeeFullName(r.emp)}
+                    {r.emp.position && <span className="ml-1 text-xs text-slate-400">· {r.emp.position}</span>}
+                  </td>
+                  <td className="px-3 py-2 text-right">
+                    {r.present}/{r.emp.expected_work_days}
+                  </td>
+                  <td className="px-3 py-2 text-right">{r.hours.toFixed(1)}</td>
+                  <td className="px-3 py-2 text-right">{r.overtime > 0 ? r.overtime.toFixed(1) : '—'}</td>
+                  <td className="px-3 py-2 text-right">{r.late > 0 ? <span className="font-medium text-red-600">{r.late}</span> : '—'}</td>
+                  <td className="px-3 py-2 text-right">{r.paidLeave > 0 ? <span className="text-green-600">{r.paidLeave}</span> : '—'}</td>
+                  <td className="px-3 py-2 text-right">{r.absent > 0 ? <span className="font-medium text-red-600">{r.absent}</span> : '—'}</td>
+                  <td className="px-3 py-2 text-right font-semibold text-navy-900">{money(r.netPay)}</td>
+                </tr>
+              ))}
+              <tr className="border-t-2 border-slate-200 bg-slate-50 font-semibold text-navy-900">
+                <td className="px-3 py-2">Totals ({rows.length})</td>
+                <td className="px-3 py-2 text-right">{totals.present}</td>
+                <td className="px-3 py-2 text-right">{totals.hours.toFixed(1)}</td>
+                <td className="px-3 py-2 text-right">{totals.overtime.toFixed(1)}</td>
+                <td className="px-3 py-2 text-right">{totals.late}</td>
+                <td className="px-3 py-2 text-right">{totals.paidLeave}</td>
+                <td className="px-3 py-2 text-right">{totals.absent}</td>
+                <td className="px-3 py-2 text-right">{money(totals.netPay)}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      <p className="text-xs text-slate-500">
+        Present / hours / overtime / late / absent reflect the current salary month. Net pay is the projected pay for this month (base pro-rated by attendance, plus the previous
+        period's overtime and profit-share, less any deductions) — the same figure the Payroll tab produces, and it becomes final once that month is finalized there.
+      </p>
     </div>
   )
 }

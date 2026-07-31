@@ -160,6 +160,116 @@ export function exportOrderSummaryPdf(title: string, monthLabel: string, lines: 
   doc.save(`order-${title.replace(/\s+/g, '-')}-${monthLabel.replace(/\s+/g, '-')}.pdf`)
 }
 
+export function exportOutstandingBalancesPdf(
+  currency: string,
+  rows: { name: string; phone: string | null; lastActivity: string | null; balance: number }[],
+) {
+  const doc = new jsPDF()
+  const total = rows.reduce((s, r) => s + r.balance, 0)
+
+  doc.setFontSize(16)
+  doc.text('Saharty Dental Clinic', 14, 18)
+  doc.setFontSize(12)
+  doc.text('Outstanding balances', 14, 26)
+  doc.setFontSize(9)
+  doc.text(`Printed: ${new Date().toLocaleString()}`, 14, 32)
+
+  let y = 44
+  doc.setFontSize(10)
+  doc.setFont('helvetica', 'bold')
+  doc.text('Patient', 14, y)
+  doc.text('Phone', 90, y)
+  doc.text('Last activity', 132, y)
+  doc.text(`Owes (${currency})`, 196, y, { align: 'right' })
+  doc.setFont('helvetica', 'normal')
+  y += 4
+  doc.line(14, y, 196, y)
+  y += 6
+
+  if (rows.length === 0) doc.text('No patient currently owes a balance.', 14, y)
+  for (const r of rows) {
+    if (y > 272) {
+      doc.addPage()
+      y = 20
+    }
+    doc.text(r.name.slice(0, 42), 14, y)
+    doc.text((r.phone || '—').slice(0, 20), 90, y)
+    doc.text(r.lastActivity || '—', 132, y)
+    doc.text(r.balance.toFixed(2), 196, y, { align: 'right' })
+    y += 7
+  }
+
+  y += 2
+  doc.line(14, y, 196, y)
+  y += 8
+  doc.setFontSize(12)
+  doc.setFont('helvetica', 'bold')
+  doc.text(`Total outstanding: ${currency} ${total.toFixed(2)}`, 14, y)
+  doc.text(`${rows.length} patient(s)`, 196, y, { align: 'right' })
+
+  doc.save(`outstanding-balances-${new Date().toISOString().slice(0, 10)}.pdf`)
+}
+
+export function exportStaffSummaryPdf(
+  monthLabel: string,
+  currency: string,
+  rows: { name: string; present: number; hours: number; overtime: number; late: number; paidLeave: number; absent: number; netPay: number }[],
+) {
+  const doc = new jsPDF()
+  doc.setFontSize(16)
+  doc.text('Saharty Dental Clinic', 14, 18)
+  doc.setFontSize(12)
+  doc.text(`Staff summary — ${monthLabel}`, 14, 26)
+
+  let y = 42
+  doc.setFontSize(9)
+  const header = () => {
+    doc.setFont('helvetica', 'bold')
+    doc.text('Employee', 14, y)
+    doc.text('Present', 78, y, { align: 'right' })
+    doc.text('Hours', 98, y, { align: 'right' })
+    doc.text('OT', 114, y, { align: 'right' })
+    doc.text('Late', 130, y, { align: 'right' })
+    doc.text('Leave', 148, y, { align: 'right' })
+    doc.text('Absent', 168, y, { align: 'right' })
+    doc.text(`Net (${currency})`, 196, y, { align: 'right' })
+    doc.setFont('helvetica', 'normal')
+    y += 4
+    doc.line(14, y, 196, y)
+    y += 6
+  }
+  header()
+
+  if (rows.length === 0) doc.text('No active staff.', 14, y)
+  for (const r of rows) {
+    if (y > 275) {
+      doc.addPage()
+      y = 20
+      header()
+    }
+    doc.text(r.name.slice(0, 32), 14, y)
+    doc.text(String(r.present), 78, y, { align: 'right' })
+    doc.text(r.hours.toFixed(1), 98, y, { align: 'right' })
+    doc.text(r.overtime.toFixed(1), 114, y, { align: 'right' })
+    doc.text(String(r.late), 130, y, { align: 'right' })
+    doc.text(String(r.paidLeave), 148, y, { align: 'right' })
+    doc.text(String(r.absent), 168, y, { align: 'right' })
+    doc.text(r.netPay.toFixed(2), 196, y, { align: 'right' })
+    y += 7
+  }
+
+  const totalNet = rows.reduce((s, r) => s + r.netPay, 0)
+  y += 2
+  doc.line(14, y, 196, y)
+  y += 8
+  doc.setFontSize(11)
+  doc.setFont('helvetica', 'bold')
+  doc.text('Total payroll', 14, y)
+  doc.text(`${currency} ${totalNet.toFixed(2)}`, 196, y, { align: 'right' })
+
+  doc.save(`staff-summary-${monthLabel.replace(/\s+/g, '-')}.pdf`)
+}
+
 export function exportDaySchedulePdf(dateLabel: string, visits: { time: string; patientName: string; status: string }[]) {
   const doc = new jsPDF()
   doc.setFontSize(16)

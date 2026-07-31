@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { Patient, Location, Provider, PatientGroup, patientFullName, calculateAge, formatDobAge, providerFullName } from '../types'
+import { formatDate } from '../lib/dates'
 import { useSettings } from '../context/SettingsContext'
 import PatientForm from '../components/PatientForm'
 import PatientBadges from '../components/PatientBadges'
@@ -25,11 +26,13 @@ export default function PatientsList() {
   const [providers, setProviders] = useState<Provider[]>([])
   const [groups, setGroups] = useState<PatientGroup[]>([])
   const [conditionPatientIds, setConditionPatientIds] = useState<Set<string>>(new Set())
+  const [lastVisitByPatient, setLastVisitByPatient] = useState<Record<string, string>>({})
   const [search, setSearch] = useState('')
   const [showNewForm, setShowNewForm] = useState(false)
   const [loading, setLoading] = useState(true)
   const [sortKey, setSortKey] = useState<SortKey>('file_number')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
+  const [page, setPage] = useState(1)
 
   const [nextFileNumber, setNextFileNumber] = useState<string | null>(null)
 
@@ -45,20 +48,43 @@ export default function PatientsList() {
     }
   }, [showNewForm, settings.auto_generate_file_number])
 
+  // Supabase caps a single query at 1000 rows, so fetch the full patient list in batches.
+  async function fetchAllPatients() {
+    const CHUNK = 1000
+    const all: Patient[] = []
+    for (let from = 0; ; from += CHUNK) {
+      const { data, error } = await supabase
+        .from('patients')
+        .select('*, provider:providers(first_name,last_name), group:patient_groups(name)')
+        .order('first_name')
+        .range(from, from + CHUNK - 1)
+      if (error) break
+      const batch = (data ?? []) as Patient[]
+      all.push(...batch)
+      if (batch.length < CHUNK) break
+    }
+    return all
+  }
+
   async function load() {
     setLoading(true)
-    const [{ data: p }, { data: l }, { data: pr }, { data: g }, { data: cond }] = await Promise.all([
-      supabase.from('patients').select('*, provider:providers(first_name,last_name), group:patient_groups(name)').order('first_name'),
+    const [p, { data: l }, { data: pr }, { data: g }, { data: cond }, { data: pastVisits }] = await Promise.all([
+      fetchAllPatients(),
       supabase.from('locations').select('*').order('name'),
       supabase.from('providers').select('*').eq('active', true).order('first_name'),
       supabase.from('patient_groups').select('*').order('name'),
-      supabase.from('patient_conditions').select('patient_id'),
+      supabase.from('patient_conditions').select('patient_id').range(0, 99999),
+      supabase.from('visits').select('patient_id, scheduled_at').lte('scheduled_at', new Date().toISOString()).order('scheduled_at', { ascending: false }),
     ])
-    setPatients(p ?? [])
+    setPatients(p)
     setLocations(l ?? [])
     setProviders(pr ?? [])
     setGroups(g ?? [])
     setConditionPatientIds(new Set((cond ?? []).map((c: any) => c.patient_id)))
+    // First row per patient is the most recent past visit (query is sorted newest-first).
+    const lastVisits: Record<string, string> = {}
+    for (const v of (pastVisits ?? []) as any[]) if (!lastVisits[v.patient_id]) lastVisits[v.patient_id] = v.scheduled_at
+    setLastVisitByPatient(lastVisits)
     setLoading(false)
   }
 
@@ -108,6 +134,16 @@ export default function PatientsList() {
       }
     })
   }, [filtered, sortKey, sortDir])
+
+  const pageSize = settings.patients_per_page || 25
+  const totalPages = Math.max(1, Math.ceil(sorted.length / pageSize))
+  const currentPage = Math.min(page, totalPages)
+  const paged = sorted.slice((currentPage - 1) * pageSize, currentPage * pageSize)
+
+  // Jump back to the first page whenever the result set or its ordering changes.
+  useEffect(() => {
+    setPage(1)
+  }, [search, sortKey, sortDir, pageSize])
 
   return (
     <div className="space-y-6">
@@ -172,9 +208,10 @@ export default function PatientsList() {
       {loading ? (
         <p className="text-slate-500">Loading…</p>
       ) : (
+        <>
         <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
           {sorted.length === 0 && <p className="p-4 text-sm text-slate-500">No patients found.</p>}
-          {sorted.map((p) => {
+          {paged.map((p) => {
             const dobAge = formatDobAge(p.date_of_birth)
             return (
               <Link
@@ -191,6 +228,7 @@ export default function PatientsList() {
                     {p.file_number && <>#{p.file_number}</>}
                     {dobAge && <> · {dobAge}</>}
                     {p.provider && <> · {providerFullName(p.provider)}</>}
+                    {lastVisitByPatient[p.id] && <> · last visit {formatDate(lastVisitByPatient[p.id])}</>}
                   </p>
                 </div>
                 <p className="text-sm text-slate-500">{p.phone}</p>
@@ -198,6 +236,31 @@ export default function PatientsList() {
             )
           })}
         </div>
+        {sorted.length > 0 && (
+          <div className="flex flex-wrap items-center justify-between gap-3 text-sm text-slate-600">
+            <span>
+              Showing {(currentPage - 1) * pageSize + 1}–{Math.min(currentPage * pageSize, sorted.length)} of {sorted.length}
+            </span>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setPage((pg) => Math.max(1, pg - 1))}
+                disabled={currentPage <= 1}
+                className="rounded-lg border border-slate-300 px-3 py-1.5 hover:bg-slate-50 disabled:opacity-40"
+              >
+                ← Prev
+              </button>
+              <span className="px-1">Page {currentPage} of {totalPages}</span>
+              <button
+                onClick={() => setPage((pg) => Math.min(totalPages, pg + 1))}
+                disabled={currentPage >= totalPages}
+                className="rounded-lg border border-slate-300 px-3 py-1.5 hover:bg-slate-50 disabled:opacity-40"
+              >
+                Next →
+              </button>
+            </div>
+          </div>
+        )}
+        </>
       )}
     </div>
   )

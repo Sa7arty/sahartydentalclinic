@@ -2,7 +2,7 @@ import { ChangeEvent, FormEvent, useEffect, useRef, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../context/AuthContext'
 import { useSettings } from '../context/SettingsContext'
-import { Provider, PatientGroup, ProcedureCategory, Procedure, providerFullName, REQUIRABLE_PATIENT_FIELDS, DENTAL_SPECIALTIES } from '../types'
+import { Provider, PatientGroup, ProcedureCategory, Procedure, ExpenseCategory, providerFullName, REQUIRABLE_PATIENT_FIELDS, DENTAL_SPECIALTIES } from '../types'
 import { WORLD_COUNTRIES } from '../data/countries'
 import { WEEKDAY_NAMES_FROM } from '../lib/dates'
 import { exportPatientsCsv, downloadPatientImportTemplate, importPatientsFromCsv } from '../lib/csv'
@@ -31,6 +31,7 @@ export default function Settings() {
 
   const [requiredFields, setRequiredFields] = useState<string[]>(settings.required_fields)
   const [elderlyAge, setElderlyAge] = useState(settings.elderly_age_threshold)
+  const [patientsPerPage, setPatientsPerPage] = useState(settings.patients_per_page)
   const [savingPatients, setSavingPatients] = useState(false)
 
   const [digitLength, setDigitLength] = useState(settings.id_digit_length)
@@ -53,6 +54,9 @@ export default function Settings() {
 
   const [conditions, setConditions] = useState<{ id: string; name: string; active: boolean }[]>([])
   const [newConditionName, setNewConditionName] = useState('')
+
+  const [expenseCategories, setExpenseCategories] = useState<ExpenseCategory[]>([])
+  const [newExpenseCategory, setNewExpenseCategory] = useState('')
 
   const [procCategories, setProcCategories] = useState<ProcedureCategory[]>([])
   const [newProcCategory, setNewProcCategory] = useState('')
@@ -81,6 +85,7 @@ export default function Settings() {
   useEffect(() => {
     setRequiredFields(settings.required_fields)
     setElderlyAge(settings.elderly_age_threshold)
+    setPatientsPerPage(settings.patients_per_page)
     setDigitLength(settings.id_digit_length)
     setAutoGenerate(settings.auto_generate_file_number)
     setWeekStartDay(settings.week_start_day)
@@ -106,6 +111,7 @@ export default function Settings() {
     loadConditions()
     loadProcedureCategories()
     loadProcedures()
+    loadExpenseCategories()
   }, [])
 
   async function loadPreview() {
@@ -173,6 +179,28 @@ export default function Settings() {
     const { error } = await supabase.from('medical_conditions').delete().eq('id', id)
     if (error) alert(error.message)
     else loadConditions()
+  }
+
+  // ---- expense categories list ----
+  async function loadExpenseCategories() {
+    const { data } = await supabase.from('expense_categories').select('*').order('name')
+    setExpenseCategories((data as ExpenseCategory[]) ?? [])
+  }
+  async function handleAddExpenseCategory(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault()
+    const name = newExpenseCategory.trim()
+    if (!name) return
+    const { error } = await supabase.from('expense_categories').insert({ name })
+    if (error) alert(error.message)
+    else {
+      setNewExpenseCategory('')
+      loadExpenseCategories()
+    }
+  }
+  async function handleDeleteExpenseCategory(id: string) {
+    const { error } = await supabase.from('expense_categories').delete().eq('id', id)
+    if (error) alert(error.message)
+    else loadExpenseCategories()
   }
 
   // ---- procedures ----
@@ -244,7 +272,7 @@ export default function Settings() {
   async function handleSavePatients(e: FormEvent<HTMLFormElement>) {
     e.preventDefault()
     setSavingPatients(true)
-    const { error } = await supabase.from('app_settings').update({ required_fields: requiredFields, elderly_age_threshold: elderlyAge }).eq('id', true)
+    const { error } = await supabase.from('app_settings').update({ required_fields: requiredFields, elderly_age_threshold: elderlyAge, patients_per_page: patientsPerPage }).eq('id', true)
     setSavingPatients(false)
     if (error) alert(error.message)
     else await refresh()
@@ -362,6 +390,20 @@ export default function Settings() {
                 <input type="number" min={1} value={elderlyAge} onChange={(e) => setElderlyAge(Number(e.target.value))} className="ml-2 w-20 rounded-lg border border-slate-300 px-2 py-1" />
               </label>
               <p className="mt-1 text-xs text-slate-400">Patients with recorded conditions are always marked "Medical".</p>
+            </div>
+            <div className="border-t border-slate-100 pt-4">
+              <h2 className="font-medium text-navy-900">Patient list</h2>
+              <label className="mt-2 block text-sm text-slate-600">
+                Show
+                <select value={patientsPerPage} onChange={(e) => setPatientsPerPage(Number(e.target.value))} className="mx-2 rounded-lg border border-slate-300 px-2 py-1">
+                  {[25, 50, 100].map((n) => (
+                    <option key={n} value={n}>
+                      {n}
+                    </option>
+                  ))}
+                </select>
+                patients per page
+              </label>
             </div>
             <button type="submit" disabled={savingPatients} className="rounded-lg bg-navy-900 px-4 py-2 text-sm font-medium text-white hover:bg-navy-800 disabled:opacity-50">
               {savingPatients ? 'Saving…' : 'Save'}
@@ -796,6 +838,37 @@ export default function Settings() {
             {savingFinancial ? 'Saving…' : 'Save'}
           </button>
         </form>
+      )}
+
+      {category === 'financial' && (
+        <div className={card}>
+          <div>
+            <h2 className="font-medium text-navy-900">Expense categories</h2>
+            <p className="text-sm text-slate-500">The list of categories offered when recording an expense, so spending groups cleanly in reports.</p>
+          </div>
+          <form onSubmit={handleAddExpenseCategory} className="flex gap-2">
+            <input
+              value={newExpenseCategory}
+              onChange={(e) => setNewExpenseCategory(e.target.value)}
+              placeholder="New category (e.g. Lab fees)"
+              className="flex-1 rounded-lg border border-slate-300 px-3 py-2 text-sm"
+            />
+            <button type="submit" className="rounded-lg bg-navy-900 px-4 py-2 text-sm font-medium text-white hover:bg-navy-800">
+              Add
+            </button>
+          </form>
+          <div className="flex flex-wrap gap-2">
+            {expenseCategories.length === 0 && <p className="text-sm text-slate-500">No categories yet.</p>}
+            {expenseCategories.map((c) => (
+              <span key={c.id} className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-slate-50 py-1 pl-3 pr-1.5 text-sm text-navy-800">
+                {c.name}
+                <button onClick={() => handleDeleteExpenseCategory(c.id)} title="Delete" className="rounded-full px-1 text-slate-400 hover:bg-red-100 hover:text-red-600">
+                  ×
+                </button>
+              </span>
+            ))}
+          </div>
+        </div>
       )}
 
       {category === 'backup' && (

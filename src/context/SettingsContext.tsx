@@ -28,6 +28,7 @@ const defaultSettings: AppSettings = {
   salary_rounding: 10,
   weekly_off_day: 5,
   late_grace_minutes: 0,
+  patients_per_page: 25,
 }
 
 const SettingsContext = createContext<SettingsContextValue | undefined>(undefined)
@@ -59,6 +60,7 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
         salary_rounding: data.salary_rounding ?? 10,
         weekly_off_day: data.weekly_off_day ?? 5,
         late_grace_minutes: data.late_grace_minutes ?? 0,
+        patients_per_page: data.patients_per_page ?? 25,
       })
     }
     setLoading(false)

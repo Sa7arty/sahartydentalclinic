@@ -479,6 +479,12 @@ export default function PatientDetail() {
   const money = (n: number) => formatMoney(n, settings)
   const balance = ledger.reduce((sum, l) => sum + (l.entry_type === 'charge' ? Number(l.amount) : -Number(l.amount)), 0)
 
+  // Soonest upcoming appointment that isn't cancelled/missed (visits are sorted newest-first).
+  const nowIso = new Date().toISOString()
+  const nextVisit = [...visits]
+    .filter((v) => v.scheduled_at >= nowIso && v.status !== 'cancelled' && v.status !== 'missed')
+    .sort((a, b) => a.scheduled_at.localeCompare(b.scheduled_at))[0]
+
   // Unified cashflow: charges, payments and clinic costs merged and sorted newest-first.
   const cashflow = [
     ...ledger.map((l) => ({ kind: 'ledger' as const, id: l.id, when: l.occurred_at, ledger: l })),
@@ -507,6 +513,11 @@ export default function PatientDetail() {
             {patient.file_number && <>File #{patient.file_number} · </>}
             {patient.phone}
           </p>
+          {nextVisit && (
+            <p className="mt-1 inline-flex items-center gap-1.5 rounded-full bg-green-50 px-3 py-1 text-xs font-medium text-green-700">
+              📅 Next appointment: {formatDateTime(nextVisit.scheduled_at)}
+            </p>
+          )}
         </div>
         {tab === 'info' && !editing && (
           <div className="flex gap-2">
