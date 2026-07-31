@@ -116,7 +116,12 @@ function EmployeesTab({ employees, settings, onChanged }: { employees: Employee[
   const [showAdd, setShowAdd] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
 
-  async function handleSave(payload: Record<string, unknown>, file: File | null, id?: string) {
+  async function handleSave(
+    payload: Record<string, unknown>,
+    file: File | null,
+    id?: string,
+    login?: { email: string; password: string; role: string } | null,
+  ) {
     let employeeId = id
     if (id) {
       const { error } = await supabase.from('employees').update({ ...payload, updated_by: session?.user.id, updated_at: new Date().toISOString() }).eq('id', id)
@@ -125,6 +130,15 @@ function EmployeesTab({ employees, settings, onChanged }: { employees: Employee[
       const { data, error } = await supabase.from('employees').insert({ ...payload, created_by: session?.user.id }).select('id').single()
       if (error) return alert(error.message)
       employeeId = data.id
+    }
+    // Optionally create a login account for this employee (owner-gated edge function) and link it.
+    if (login && employeeId) {
+      const { data: res, error: fnErr } = await supabase.functions.invoke('admin-create-user', {
+        body: { full_name: `${payload.first_name ?? ''} ${payload.last_name ?? ''}`.trim(), email: login.email, password: login.password, role: login.role },
+      })
+      const errMsg = fnErr?.message || (res as { error?: string })?.error
+      if (errMsg) alert(`Employee saved, but the login could not be created: ${errMsg}`)
+      else if ((res as { user_id?: string })?.user_id) await supabase.from('employees').update({ user_id: (res as { user_id: string }).user_id }).eq('id', employeeId)
     }
     if (file && employeeId) {
       const ext = file.name.split('.').pop() || 'jpg'
@@ -163,7 +177,7 @@ function EmployeesTab({ employees, settings, onChanged }: { employees: Employee[
         </button>
       </div>
 
-      {showAdd && <EmployeeForm settings={settings} onSave={(p, f) => handleSave(p, f)} onCancel={() => setShowAdd(false)} />}
+      {showAdd && <EmployeeForm settings={settings} onSave={(p, f, login) => handleSave(p, f, undefined, login)} onCancel={() => setShowAdd(false)} />}
 
       <div className="divide-y divide-slate-100">
         {employees.length === 0 && !showAdd && <p className="py-2 text-sm text-slate-500">No employees yet — add one above.</p>}
@@ -244,11 +258,12 @@ function EmployeeForm({
 }: {
   employee?: Employee
   settings: AppSettings
-  onSave: (payload: Record<string, unknown>, file: File | null) => void
+  onSave: (payload: Record<string, unknown>, file: File | null, login?: { email: string; password: string; role: string } | null) => void
   onCancel: () => void
 }) {
   const [file, setFile] = useState<File | null>(null)
   const [hoursMode, setHoursMode] = useState<'shift' | 'flexible'>(employee && !employee.shift_start ? 'flexible' : 'shift')
+  const [makeLogin, setMakeLogin] = useState(false)
   const input = 'w-full rounded-lg border border-slate-300 px-3 py-2 text-sm'
 
   function handleSubmit(e: FormEvent<HTMLFormElement>) {
@@ -285,6 +300,9 @@ function EmployeeForm({
         active: f.get('active') === 'on',
       },
       file,
+      !employee && makeLogin
+        ? { email: String(f.get('login_email') || f.get('email') || '').trim(), password: String(f.get('login_password') || ''), role: String(f.get('login_role') || 'assistant') }
+        : null,
     )
   }
 
@@ -404,6 +422,26 @@ function EmployeeForm({
         <input type="checkbox" name="active" defaultChecked={employee?.active ?? true} />
         Active
       </label>
+
+      {!employee && (
+        <div className="rounded-lg border border-slate-200 bg-white p-3 sm:col-span-2">
+          <label className="flex items-center gap-2 text-sm font-medium text-navy-800">
+            <input type="checkbox" checked={makeLogin} onChange={(e) => setMakeLogin(e.target.checked)} />
+            Create a login for this employee
+          </label>
+          {makeLogin && (
+            <div className="mt-3 grid gap-3 sm:grid-cols-3">
+              <input name="login_email" type="email" placeholder="Login email (defaults to the email above)" className={`${input} sm:col-span-3`} />
+              <input name="login_password" type="text" placeholder="Temporary password (min 6)" className={input} />
+              <select name="login_role" defaultValue="assistant" className={input}>
+                <option value="assistant">Assistant</option>
+                <option value="receptionist">Receptionist</option>
+              </select>
+              <p className="text-[11px] text-slate-400 sm:col-span-3">They sign in with this email + temporary password and can change it afterward. Access is set by their role.</p>
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="flex gap-2 sm:col-span-2">
         <button type="submit" className="rounded-lg bg-navy-900 px-4 py-2 text-sm font-medium text-white hover:bg-navy-800">

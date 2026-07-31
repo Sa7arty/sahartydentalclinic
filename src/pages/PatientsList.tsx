@@ -170,7 +170,7 @@ export default function PatientsList() {
     })
   }, [filtered, sortKey, sortDir])
 
-  const pageSize = settings.patients_per_page || 25
+  const pageSize = settings.rows_per_page || 25
   const totalPages = Math.max(1, Math.ceil(sorted.length / pageSize))
   const currentPage = Math.min(page, totalPages)
   const paged = sorted.slice((currentPage - 1) * pageSize, currentPage * pageSize)

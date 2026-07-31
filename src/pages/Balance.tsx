@@ -146,6 +146,7 @@ export default function Balance() {
   const [myName, setMyName] = useState('') // display name of the logged-in user, stamped on new expenses
   const [editingExpenseId, setEditingExpenseId] = useState<string | null>(null)
   const [editingMiscId, setEditingMiscId] = useState<string | null>(null)
+  const [expensePage, setExpensePage] = useState(1)
   const [loading, setLoading] = useState(true)
   const [outstanding, setOutstanding] = useState<OutstandingRow[]>([])
   const [outstandingLoading, setOutstandingLoading] = useState(false)
@@ -385,6 +386,14 @@ export default function Balance() {
   const incomeTotal = income.reduce((sum, r) => sum + Number(r.amount), 0) + miscIncomeTotal
   const expensesTotal = expenses.reduce((sum, r) => sum + Number(r.amount), 0)
   const net = incomeTotal - expensesTotal
+
+  const expPageSize = settings.rows_per_page || 25
+  const expTotalPages = Math.max(1, Math.ceil(expenses.length / expPageSize))
+  const expPage = Math.min(expensePage, expTotalPages)
+  const pagedExpenses = expenses.slice((expPage - 1) * expPageSize, expPage * expPageSize)
+  useEffect(() => {
+    setExpensePage(1)
+  }, [period, customFrom, customTo, tab])
 
   const cashItems: CashItem[] = useMemo(() => {
     const items: CashItem[] = [
@@ -732,7 +741,7 @@ export default function Balance() {
 
           <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
             {expenses.length === 0 && <p className="p-4 text-sm text-slate-500">No expenses in this period.</p>}
-            {expenses.map((e) =>
+            {pagedExpenses.map((e) =>
               editingExpenseId === e.id ? (
                 <form key={e.id} onSubmit={(ev) => handleSaveExpenseEdit(ev, e)} className="space-y-2 border-b border-slate-100 px-4 py-3 last:border-0">
                   <input name="description" defaultValue={e.description} placeholder="Description" className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
@@ -808,6 +817,22 @@ export default function Balance() {
               ),
             )}
           </div>
+          {expenses.length > expPageSize && (
+            <div className="flex flex-wrap items-center justify-between gap-3 text-sm text-slate-600">
+              <span>
+                Showing {(expPage - 1) * expPageSize + 1}–{Math.min(expPage * expPageSize, expenses.length)} of {expenses.length}
+              </span>
+              <div className="flex items-center gap-2">
+                <button onClick={() => setExpensePage((p) => Math.max(1, p - 1))} disabled={expPage <= 1} className="rounded-lg border border-slate-300 px-3 py-1.5 hover:bg-slate-50 disabled:opacity-40">
+                  ← Prev
+                </button>
+                <span className="px-1">Page {expPage} of {expTotalPages}</span>
+                <button onClick={() => setExpensePage((p) => Math.min(expTotalPages, p + 1))} disabled={expPage >= expTotalPages} className="rounded-lg border border-slate-300 px-3 py-1.5 hover:bg-slate-50 disabled:opacity-40">
+                  Next →
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>

@@ -40,7 +40,7 @@ export default function Settings() {
 
   const [requiredFields, setRequiredFields] = useState<string[]>(settings.required_fields)
   const [elderlyAge, setElderlyAge] = useState(settings.elderly_age_threshold)
-  const [patientsPerPage, setPatientsPerPage] = useState(settings.patients_per_page)
+  const [patientsPerPage, setPatientsPerPage] = useState(settings.rows_per_page)
   const [savingPatients, setSavingPatients] = useState(false)
 
   const [digitLength, setDigitLength] = useState(settings.id_digit_length)
@@ -100,7 +100,7 @@ export default function Settings() {
   useEffect(() => {
     setRequiredFields(settings.required_fields)
     setElderlyAge(settings.elderly_age_threshold)
-    setPatientsPerPage(settings.patients_per_page)
+    setPatientsPerPage(settings.rows_per_page)
     setDigitLength(settings.id_digit_length)
     setAutoGenerate(settings.auto_generate_file_number)
     setWeekStartDay(settings.week_start_day)
@@ -354,7 +354,7 @@ export default function Settings() {
   async function handleSavePatients(e: FormEvent<HTMLFormElement>) {
     e.preventDefault()
     setSavingPatients(true)
-    const { error } = await supabase.from('app_settings').update({ required_fields: requiredFields, elderly_age_threshold: elderlyAge, patients_per_page: patientsPerPage }).eq('id', true)
+    const { error } = await supabase.from('app_settings').update({ required_fields: requiredFields, elderly_age_threshold: elderlyAge, rows_per_page: patientsPerPage }).eq('id', true)
     setSavingPatients(false)
     if (error) alert(error.message)
     else await refresh()
@@ -474,7 +474,7 @@ export default function Settings() {
               <p className="mt-1 text-xs text-slate-400">Patients with recorded conditions are always marked "Medical".</p>
             </div>
             <div className="border-t border-slate-100 pt-4">
-              <h2 className="font-medium text-navy-900">Patient list</h2>
+              <h2 className="font-medium text-navy-900">Rows per page (all lists)</h2>
               <label className="mt-2 block text-sm text-slate-600">
                 Show
                 <select value={patientsPerPage} onChange={(e) => setPatientsPerPage(Number(e.target.value))} className="mx-2 rounded-lg border border-slate-300 px-2 py-1">
@@ -484,8 +484,9 @@ export default function Settings() {
                     </option>
                   ))}
                 </select>
-                patients per page
+                rows per page
               </label>
+              <p className="mt-1 text-xs text-slate-400">Applies to every paged list — patients, expenses, and more.</p>
             </div>
             <button type="submit" disabled={savingPatients} className="rounded-lg bg-navy-900 px-4 py-2 text-sm font-medium text-white hover:bg-navy-800 disabled:opacity-50">
               {savingPatients ? 'Saving…' : 'Save'}

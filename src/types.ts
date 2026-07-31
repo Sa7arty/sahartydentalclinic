@@ -159,7 +159,7 @@ export interface AppSettings {
   salary_rounding: number
   weekly_off_day: number
   late_grace_minutes: number
-  patients_per_page: number
+  rows_per_page: number
   expense_category_required: boolean
   expense_item_required: boolean
   expense_description_required: boolean
