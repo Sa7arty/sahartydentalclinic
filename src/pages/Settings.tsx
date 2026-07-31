@@ -10,7 +10,7 @@ import { exportPatientsCsv, downloadPatientImportTemplate, importPatientsFromCsv
 const DURATION_OPTIONS = [15, 20, 30, 45, 60, 75, 90, 120]
 const WEEKDAY_FULL_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
 
-type Category = 'patients' | 'calendar' | 'providers' | 'procedures' | 'price-list' | 'financial' | 'backup'
+type Category = 'patients' | 'calendar' | 'providers' | 'procedures' | 'price-list' | 'financial' | 'team' | 'backup'
 
 const CATEGORIES: { key: Category; label: string }[] = [
   { key: 'patients', label: 'Patients' },
@@ -19,13 +19,22 @@ const CATEGORIES: { key: Category; label: string }[] = [
   { key: 'procedures', label: 'Procedures' },
   { key: 'price-list', label: 'Price list' },
   { key: 'financial', label: 'Financial' },
+  { key: 'team', label: 'Team & access' },
   { key: 'backup', label: 'Backup & import' },
 ]
+
+const TEAM_ROLES: { value: string; label: string }[] = [
+  { value: 'receptionist', label: 'Receptionist' },
+  { value: 'assistant', label: 'Assistant' },
+  { value: 'provider', label: 'Provider (dentist)' },
+  { value: 'dentist', label: 'Owner (full access)' },
+]
+type TeamMember = { id: string; full_name: string | null; email: string | null; roles: string[] }
 
 const card = 'space-y-3 rounded-xl border border-slate-200 bg-white p-4'
 
 export default function Settings() {
-  const { isDentist } = useAuth()
+  const { isDentist, session } = useAuth()
   const { settings, refresh } = useSettings()
   const [category, setCategory] = useState<Category>('patients')
 
@@ -59,6 +68,10 @@ export default function Settings() {
   const [newExpenseCategory, setNewExpenseCategory] = useState('')
   const [expenseItems, setExpenseItems] = useState<ExpenseItem[]>([])
   const [newExpenseItem, setNewExpenseItem] = useState<Record<string, string>>({})
+
+  const [team, setTeam] = useState<TeamMember[]>([])
+  const [addingMember, setAddingMember] = useState(false)
+  const [memberMsg, setMemberMsg] = useState<string | null>(null)
 
   const [procCategories, setProcCategories] = useState<ProcedureCategory[]>([])
   const [newProcCategory, setNewProcCategory] = useState('')
@@ -114,7 +127,51 @@ export default function Settings() {
     loadProcedureCategories()
     loadProcedures()
     loadExpenseCategories()
+    loadTeam()
   }, [])
+
+  async function loadTeam() {
+    const [{ data: profs }, { data: roleRows }] = await Promise.all([
+      supabase.from('profiles').select('id, full_name, email'),
+      supabase.from('user_roles').select('user_id, role'),
+    ])
+    const rolesByUser: Record<string, string[]> = {}
+    for (const r of (roleRows ?? []) as { user_id: string; role: string }[]) (rolesByUser[r.user_id] = rolesByUser[r.user_id] ?? []).push(r.role)
+    setTeam(((profs ?? []) as { id: string; full_name: string | null; email: string | null }[]).map((p) => ({ ...p, roles: rolesByUser[p.id] ?? [] })))
+  }
+
+  async function handleAddMember(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault()
+    const f = new FormData(e.currentTarget)
+    const role = f.get('role') as string
+    setAddingMember(true)
+    setMemberMsg(null)
+    const { data, error } = await supabase.functions.invoke('admin-create-user', {
+      body: {
+        full_name: f.get('full_name'),
+        email: f.get('email'),
+        password: f.get('password'),
+        role,
+        provider_id: role === 'provider' ? f.get('provider_id') || null : null,
+      },
+    })
+    setAddingMember(false)
+    if (error || (data && (data as { error?: string }).error)) {
+      setMemberMsg(`⚠ ${(data as { error?: string })?.error ?? error?.message ?? 'Could not add member'}`)
+      return
+    }
+    setMemberMsg('✓ Team member added. Share the email + temporary password with them; they can change it after signing in.')
+    ;(e.target as HTMLFormElement).reset()
+    loadTeam()
+  }
+
+  async function handleSetRole(userId: string, role: string) {
+    // Replace the member's role with the chosen one (single-role model for now).
+    await supabase.from('user_roles').delete().eq('user_id', userId)
+    const { error } = await supabase.from('user_roles').insert({ user_id: userId, role })
+    if (error) alert(error.message)
+    else loadTeam()
+  }
 
   async function loadPreview() {
     const { data } = await supabase.rpc('peek_next_patient_file_number')
@@ -942,6 +999,75 @@ export default function Settings() {
               Add category
             </button>
           </form>
+        </div>
+      )}
+
+      {category === 'team' && (
+        <div className="space-y-4">
+          <form onSubmit={handleAddMember} className={card}>
+            <div>
+              <h2 className="font-medium text-navy-900">Add a team member</h2>
+              <p className="text-sm text-slate-500">Create a login for a staff member or provider. You set a temporary password; they can change it after they sign in.</p>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <input name="full_name" required placeholder="Full name" className="rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+              <input name="email" type="email" required placeholder="Email (their login)" className="rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+              <input name="password" required minLength={6} placeholder="Temporary password (min 6 chars)" className="rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+              <select name="role" defaultValue="receptionist" className="rounded-lg border border-slate-300 px-3 py-2 text-sm">
+                {TEAM_ROLES.map((r) => (
+                  <option key={r.value} value={r.value}>
+                    {r.label}
+                  </option>
+                ))}
+              </select>
+              <select name="provider_id" defaultValue="" className="rounded-lg border border-slate-300 px-3 py-2 text-sm sm:col-span-2">
+                <option value="">Link to a provider record (only for the Provider role)</option>
+                {providers.map((pr) => (
+                  <option key={pr.id} value={pr.id}>
+                    {providerFullName(pr)}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <button type="submit" disabled={addingMember} className="rounded-lg bg-navy-900 px-4 py-2 text-sm font-medium text-white hover:bg-navy-800 disabled:opacity-50">
+              {addingMember ? 'Adding…' : 'Add member'}
+            </button>
+            {memberMsg && <p className={`text-sm ${memberMsg.startsWith('✓') ? 'text-green-700' : 'text-red-600'}`}>{memberMsg}</p>}
+            <p className="text-[11px] text-slate-400">
+              A <span className="font-medium">Provider</span> account sees only their own appointments and the finances of patients whose main provider is them. Receptionist/Assistant have limited access; the Owner sees everything.
+            </p>
+          </form>
+
+          <div className={card}>
+            <h2 className="font-medium text-navy-900">Team members</h2>
+            {team.length === 0 && <p className="text-sm text-slate-500">No members yet.</p>}
+            <div className="divide-y divide-slate-100">
+              {team.map((m) => (
+                <div key={m.id} className="flex flex-wrap items-center justify-between gap-2 py-2">
+                  <div className="min-w-0">
+                    <p className="font-medium text-navy-900">{m.full_name || m.email || 'Unnamed'}</p>
+                    <p className="text-xs text-slate-400">{m.email}</p>
+                  </div>
+                  <select
+                    value={m.roles[0] ?? ''}
+                    onChange={(e) => handleSetRole(m.id, e.target.value)}
+                    disabled={m.id === session?.user.id}
+                    title={m.id === session?.user.id ? "You can't change your own role" : 'Change role'}
+                    className="rounded-lg border border-slate-300 px-2 py-1.5 text-sm disabled:opacity-50"
+                  >
+                    <option value="" disabled>
+                      No role
+                    </option>
+                    {TEAM_ROLES.map((r) => (
+                      <option key={r.value} value={r.value}>
+                        {r.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              ))}
+            </div>
+          </div>
         </div>
       )}
 
