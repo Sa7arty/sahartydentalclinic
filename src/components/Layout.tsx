@@ -54,6 +54,11 @@ export default function Layout() {
               </NavLink>
             )}
             {isDentist && (
+              <NavLink to="/analytics" className={({ isActive }) => `${navItem} ${isActive ? navItemActive : 'text-slate-200'}`}>
+                Analytics
+              </NavLink>
+            )}
+            {isDentist && (
               <NavLink to="/settings" className={({ isActive }) => `${navItem} ${isActive ? navItemActive : 'text-slate-200'}`}>
                 Settings
               </NavLink>

@@ -9,6 +9,7 @@ import Schedule from './pages/Schedule'
 import NewVisit from './pages/NewVisit'
 import Balance from './pages/Balance'
 import HR from './pages/HR'
+import Analytics from './pages/Analytics'
 import Inventory from './pages/Inventory'
 import Settings from './pages/Settings'
 
@@ -32,6 +33,7 @@ export default function App() {
         <Route path="finances" element={<Balance />} />
         <Route path="balance" element={<Navigate to="/finances" replace />} />
         <Route path="hr" element={<HR />} />
+        <Route path="analytics" element={<Analytics />} />
         <Route path="inventory" element={<Inventory />} />
         <Route path="settings" element={<Settings />} />
       </Route>
