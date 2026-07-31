@@ -385,6 +385,7 @@ export interface Expense {
   description: string
   category: string | null
   item: string | null
+  added_by_name: string | null
   amount: number
   payment_method: PaymentMethod | null
   expense_type: ExpenseType

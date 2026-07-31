@@ -143,6 +143,7 @@ export default function Balance() {
   const [categories, setCategories] = useState<ExpenseCategory[]>([])
   const [items, setItems] = useState<ExpenseItem[]>([])
   const [addCategory, setAddCategory] = useState('') // selected category name in the add-expense form
+  const [myName, setMyName] = useState('') // display name of the logged-in user, stamped on new expenses
   const [editingExpenseId, setEditingExpenseId] = useState<string | null>(null)
   const [editingMiscId, setEditingMiscId] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
@@ -162,6 +163,17 @@ export default function Balance() {
     load()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [period, customFrom, customTo])
+
+  // Resolve the current user's display name once (used as "added by" on new expenses).
+  useEffect(() => {
+    if (!session) return
+    supabase
+      .from('profiles')
+      .select('full_name')
+      .eq('id', session.user.id)
+      .single()
+      .then(({ data }) => setMyName((data?.full_name as string) || session.user.email?.split('@')[0] || 'Staff'))
+  }, [session])
 
   useEffect(() => {
     if (tab === 'outstanding') loadOutstanding()
@@ -264,6 +276,7 @@ export default function Balance() {
         description: form.get('description'),
         category: categoryVal || null,
         item: itemVal || null,
+        added_by_name: myName || null,
         amount: form.get('amount'),
         payment_method: form.get('payment_method') || null,
         interval_unit: preset.unit,
@@ -285,6 +298,7 @@ export default function Balance() {
         description: form.get('description'),
         category: categoryVal || null,
         item: itemVal || null,
+        added_by_name: myName || null,
         amount: form.get('amount'),
         payment_method: form.get('payment_method') || null,
         expense_type: 'general',
@@ -774,6 +788,7 @@ export default function Balance() {
                       {e.item ? ` › ${e.item}` : ''}
                       {e.provider ? ` · ${providerFullName(e.provider)}` : ''}
                       {e.payment_method ? ` · ${PAYMENT_METHOD_LABELS[e.payment_method]}` : ''}
+                      {e.added_by_name ? ` · by ${e.added_by_name}` : ''}
                     </p>
                   </div>
                   <div className="flex shrink-0 items-center gap-3">
