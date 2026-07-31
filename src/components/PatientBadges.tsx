@@ -15,11 +15,14 @@ export default function PatientBadges({
   patient,
   elderlyAgeThreshold,
   hasCondition = false,
+  incompleteFields = [],
   size = 'sm',
 }: {
   patient: BadgePatient
   elderlyAgeThreshold: number
   hasCondition?: boolean
+  /** Labels of currently-mandatory fields this file is missing; shows an "Incomplete" mark when non-empty. */
+  incompleteFields?: string[]
   size?: 'sm' | 'xs'
 }) {
   const pill = size === 'xs' ? 'px-1 py-0 text-[9px]' : 'px-1.5 py-0.5 text-[10px]'
@@ -27,6 +30,11 @@ export default function PatientBadges({
   const senior = isElderly({ date_of_birth: patient.date_of_birth }, elderlyAgeThreshold)
   return (
     <>
+      {incompleteFields.length > 0 && (
+        <span title={`Missing required info: ${incompleteFields.join(', ')}`} className={`rounded-full bg-orange-100 font-semibold text-orange-700 ${pill}`}>
+          ⚠ Incomplete
+        </span>
+      )}
       {medical && (
         <span title="Has medical condition(s)" className={`rounded-full bg-red-100 font-semibold text-red-700 ${pill}`}>
           Medical

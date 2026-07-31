@@ -261,6 +261,21 @@ export function patientFullName(p: Pick<Patient, 'first_name' | 'middle_name' | 
   return [p.title, p.first_name, p.middle_name, p.last_name].filter(Boolean).join(' ')
 }
 
+/**
+ * Which currently-mandatory fields are empty on this patient file. Recomputed from
+ * `requiredFields` each time, so a file's "incomplete" mark updates the moment the
+ * dentist changes which fields are mandatory in Settings.
+ */
+export function missingRequiredPatientFields(p: Partial<Patient>, requiredFields: string[]): string[] {
+  const labelOf = (k: string) => REQUIRABLE_PATIENT_FIELDS.find((f) => f.key === k)?.label ?? k
+  return requiredFields
+    .filter((k) => {
+      const v = (p as Record<string, unknown>)[k]
+      return v === null || v === undefined || String(v).trim() === ''
+    })
+    .map(labelOf)
+}
+
 /** Age is always derived from date_of_birth + today, never stored. */
 export function calculateAge(dateOfBirth: string | null): number | null {
   if (!dateOfBirth) return null

@@ -24,6 +24,7 @@ import {
   COMMON_ALLERGIES,
   Expense,
   patientFullName,
+  missingRequiredPatientFields,
   calculateAge,
   auditName,
   providerFullName,
@@ -507,7 +508,7 @@ export default function PatientDetail() {
         <div>
           <h1 className="flex flex-wrap items-center gap-2 text-2xl font-semibold text-navy-900">
             {patientFullName(patient)}
-            <PatientBadges patient={patient} elderlyAgeThreshold={settings.elderly_age_threshold} hasCondition={conditions.length > 0} />
+            <PatientBadges patient={patient} elderlyAgeThreshold={settings.elderly_age_threshold} hasCondition={conditions.length > 0} incompleteFields={missingRequiredPatientFields(patient, settings.required_fields)} />
           </h1>
           <p className="text-sm text-slate-500">
             {patient.file_number && <>File #{patient.file_number} · </>}

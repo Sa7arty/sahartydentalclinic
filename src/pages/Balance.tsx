@@ -141,6 +141,7 @@ export default function Balance() {
   const [recurring, setRecurring] = useState<RecurringExpense[]>([])
   const [categories, setCategories] = useState<ExpenseCategory[]>([])
   const [editingExpenseId, setEditingExpenseId] = useState<string | null>(null)
+  const [editingMiscId, setEditingMiscId] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [outstanding, setOutstanding] = useState<OutstandingRow[]>([])
   const [outstandingLoading, setOutstandingLoading] = useState(false)
@@ -321,6 +322,33 @@ export default function Balance() {
   async function handleDeleteExpense(id: string) {
     if (!confirm('Delete this expense? This cannot be undone.')) return
     const { error } = await supabase.from('expenses').delete().eq('id', id)
+    if (error) alert(error.message)
+    else load()
+  }
+
+  async function handleSaveMiscEdit(e: FormEvent<HTMLFormElement>, m: MiscIncome) {
+    e.preventDefault()
+    const form = new FormData(e.currentTarget)
+    const occurredAt = form.get('occurred_at')
+    const { error } = await supabase
+      .from('misc_income')
+      .update({
+        description: form.get('description'),
+        amount: form.get('amount'),
+        occurred_at: occurredAt ? new Date(occurredAt as string).toISOString() : undefined,
+        income_date: occurredAt ? new Date(occurredAt as string).toISOString().slice(0, 10) : undefined,
+      })
+      .eq('id', m.id)
+    if (error) alert(error.message)
+    else {
+      setEditingMiscId(null)
+      load()
+    }
+  }
+
+  async function handleDeleteMisc(id: string) {
+    if (!confirm('Delete this income entry? This cannot be undone.\n\nNote: if it came from a staff loan repayment and that loan still exists in HR, undo it from HR → Deductions instead so the loan balance stays correct.')) return
+    const { error } = await supabase.from('misc_income').delete().eq('id', id)
     if (error) alert(error.message)
     else load()
   }
@@ -532,17 +560,43 @@ export default function Balance() {
                 <p className="font-medium text-green-600">+{money(Number(r.amount))}</p>
               </Link>
             ))}
-            {miscIncome.map((r) => (
-              <div key={r.id} className="flex items-center justify-between border-b border-slate-100 px-4 py-3 last:border-0">
-                <div>
-                  <p className="font-medium text-navy-900">{r.description}</p>
-                  <p className="text-xs text-slate-400">
-                    {formatDateTime(r.occurred_at)} · Other income{r.category ? ` · ${r.category}` : ''}
-                  </p>
+            {miscIncome.map((r) =>
+              editingMiscId === r.id ? (
+                <form key={r.id} onSubmit={(ev) => handleSaveMiscEdit(ev, r)} className="space-y-2 border-b border-slate-100 px-4 py-3 last:border-0">
+                  <input name="description" defaultValue={r.description} placeholder="Description" className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    <input name="amount" type="number" step="0.01" required defaultValue={r.amount} className="rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+                    <input name="occurred_at" type="datetime-local" defaultValue={toDatetimeLocal(r.occurred_at)} className="rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+                  </div>
+                  <div className="flex gap-2">
+                    <button type="submit" className="rounded-lg bg-navy-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-navy-800">
+                      Save
+                    </button>
+                    <button type="button" onClick={() => setEditingMiscId(null)} className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm text-navy-800 hover:bg-slate-50">
+                      Cancel
+                    </button>
+                  </div>
+                </form>
+              ) : (
+                <div key={r.id} className="flex items-center justify-between gap-3 border-b border-slate-100 px-4 py-3 last:border-0">
+                  <div className="min-w-0">
+                    <p className="font-medium text-navy-900">{r.description}</p>
+                    <p className="text-xs text-slate-400">
+                      {formatDateTime(r.occurred_at)} · Other income{r.category ? ` · ${r.category}` : ''}
+                    </p>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-3">
+                    <p className="font-medium text-green-600">+{money(Number(r.amount))}</p>
+                    <button onClick={() => setEditingMiscId(r.id)} className="text-xs font-medium text-navy-700 hover:underline">
+                      Edit
+                    </button>
+                    <button onClick={() => handleDeleteMisc(r.id)} className="text-xs text-red-600 hover:underline">
+                      Delete
+                    </button>
+                  </div>
                 </div>
-                <p className="font-medium text-green-600">+{money(Number(r.amount))}</p>
-              </div>
-            ))}
+              ),
+            )}
           </div>
         </div>
       ) : (

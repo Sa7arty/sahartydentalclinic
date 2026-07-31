@@ -1060,26 +1060,55 @@ function DeductionsTab({ employees, settings }: { employees: Employee[]; setting
     const newSettled = Number(d.amount_settled) + capped
     const fullyPaid = newSettled >= Number(d.total_amount) - 0.001
     const paymentKind = fullyPaid ? 'full_settlement' : 'partial_settlement'
-    const { error } = await supabase.from('deduction_payments').insert({
-      deduction_id: d.id,
-      amount: capped,
-      kind: paymentKind,
-      paid_on: paidOn,
-      created_by: session?.user.id,
-    })
+    const { data: payRow, error } = await supabase
+      .from('deduction_payments')
+      .insert({
+        deduction_id: d.id,
+        amount: capped,
+        kind: paymentKind,
+        paid_on: paidOn,
+        created_by: session?.user.id,
+      })
+      .select('id')
+      .single()
     if (error) return alert(error.message)
     await supabase.from('employee_deductions').update({ amount_settled: newSettled, active: !fullyPaid }).eq('id', d.id)
     if (d.kind === 'loan') {
+      // A loan repayment comes back to the clinic → record it as income, linked to this payment
+      // so it can be reversed together if the settlement is later deleted.
       await supabase.from('misc_income').insert({
         description: `Loan repayment — ${employee ? employeeFullName(employee) : 'employee'}${d.description ? ` (${d.description})` : ''}`,
         category: 'Staff loan',
         amount: capped,
         occurred_at: new Date(`${paidOn}T12:00:00`).toISOString(),
         income_date: paidOn,
+        deduction_payment_id: payRow?.id ?? null,
         entered_by: session?.user.id,
       })
     }
     setPayingId(null)
+    load()
+  }
+
+  // Undo a manually-recorded settlement: reverse the amount settled, re-open the loan/deduction
+  // if needed, and remove the linked income entry. (Salary deductions come from payroll and can't
+  // be undone here.)
+  async function handleDeletePayment(d: EmployeeDeduction, p: DeductionPayment) {
+    if (p.kind === 'salary_deduction') {
+      alert('This installment was taken by a finalized payroll and cannot be undone here.')
+      return
+    }
+    if (!confirm(`Undo this ${DEDUCTION_PAYMENT_LABELS[p.kind].toLowerCase()} of ${money(Number(p.amount))} on ${formatDate(p.paid_on)}?${d.kind === 'loan' ? ' Its income entry will also be removed.' : ''}`)) return
+    if (d.kind === 'loan') {
+      const { data: linked } = await supabase.from('misc_income').delete().eq('deduction_payment_id', p.id).select('id')
+      // Older repayments (recorded before payments were linked) are matched heuristically.
+      if (!linked || linked.length === 0) {
+        await supabase.from('misc_income').delete().like('description', 'Loan repayment%').eq('amount', Number(p.amount)).eq('income_date', p.paid_on)
+      }
+    }
+    const newSettled = Math.max(0, Number(d.amount_settled) - Number(p.amount))
+    await supabase.from('employee_deductions').update({ amount_settled: newSettled, active: newSettled < Number(d.total_amount) - 0.001 }).eq('id', d.id)
+    await supabase.from('deduction_payments').delete().eq('id', p.id)
     load()
   }
 
@@ -1251,11 +1280,18 @@ function DeductionsTab({ employees, settings }: { employees: Employee[]; setting
                       <p className="mb-1 text-[11px] font-medium uppercase tracking-wide text-slate-400">Payment history</p>
                       <div className="space-y-0.5">
                         {history.map((p) => (
-                          <div key={p.id} className="flex justify-between text-xs text-slate-600">
+                          <div key={p.id} className="flex items-center justify-between gap-2 text-xs text-slate-600">
                             <span>
                               {formatDate(p.paid_on)} · {DEDUCTION_PAYMENT_LABELS[p.kind]}
                             </span>
-                            <span className="font-medium">{money(Number(p.amount))}</span>
+                            <span className="flex items-center gap-2">
+                              <span className="font-medium">{money(Number(p.amount))}</span>
+                              {p.kind !== 'salary_deduction' && (
+                                <button onClick={() => handleDeletePayment(d, p)} title="Undo this payment" className="text-red-600 hover:underline">
+                                  Undo
+                                </button>
+                              )}
+                            </span>
                           </div>
                         ))}
                       </div>

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
-import { Patient, Location, Provider, PatientGroup, patientFullName, calculateAge, formatDobAge, providerFullName } from '../types'
+import { Patient, Location, Provider, PatientGroup, patientFullName, calculateAge, formatDobAge, providerFullName, missingRequiredPatientFields } from '../types'
 import { formatDate } from '../lib/dates'
 import { useSettings } from '../context/SettingsContext'
 import PatientForm from '../components/PatientForm'
@@ -222,7 +222,7 @@ export default function PatientsList() {
                 <div>
                   <p className="flex items-center gap-1.5 font-medium text-navy-900">
                     {patientFullName(p)}
-                    <PatientBadges patient={p} elderlyAgeThreshold={settings.elderly_age_threshold} hasCondition={conditionPatientIds.has(p.id)} />
+                    <PatientBadges patient={p} elderlyAgeThreshold={settings.elderly_age_threshold} hasCondition={conditionPatientIds.has(p.id)} incompleteFields={missingRequiredPatientFields(p, settings.required_fields)} />
                   </p>
                   <p className="text-xs text-slate-400">
                     {p.file_number && <>#{p.file_number}</>}
