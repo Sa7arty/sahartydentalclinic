@@ -164,6 +164,7 @@ export interface AppSettings {
   expense_item_required: boolean
   expense_description_required: boolean
   big_debt_threshold: number
+  visit_provider_required: boolean
 }
 
 /** Round a value to the nearest `increment` (0 or 1 = no rounding). */

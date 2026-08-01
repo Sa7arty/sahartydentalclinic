@@ -162,12 +162,17 @@ export default function PatientDetail() {
     e.preventDefault()
     if (!id || !patient?.primary_location_id) return
     const form = new FormData(e.currentTarget)
+    const providerId = (form.get('provider_id') as string) || null
+    if (settings.visit_provider_required && !providerId) {
+      alert('Please choose a provider for this visit.')
+      return
+    }
     const { error } = await supabase.from('visits').insert({
       patient_id: id,
       location_id: patient.primary_location_id,
-      provider_id: patient.provider_id,
+      provider_id: providerId,
       scheduled_at: form.get('scheduled_at'),
-      status: 'unconfirmed',
+      status: (form.get('status') as string) || 'unconfirmed',
     })
     if (!error) load(id)
     else alert(error.message)
@@ -660,6 +665,24 @@ export default function PatientDetail() {
             <div>
               <label className="mb-1 block text-sm text-slate-500">Schedule a visit</label>
               <input name="scheduled_at" type="datetime-local" required className="rounded-lg border border-slate-300 px-3 py-2" />
+            </div>
+            <div>
+              <label className="mb-1 block text-sm text-slate-500">Provider{settings.visit_provider_required ? ' *' : ''}</label>
+              <select name="provider_id" defaultValue={patient?.provider_id ?? ''} className="rounded-lg border border-slate-300 px-3 py-2">
+                <option value="">{settings.visit_provider_required ? '— Select a provider —' : 'No provider'}</option>
+                {providers.map((pr) => (
+                  <option key={pr.id} value={pr.id}>
+                    {providerFullName(pr)}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="mb-1 block text-sm text-slate-500">Status</label>
+              <select name="status" defaultValue="unconfirmed" className="rounded-lg border border-slate-300 px-3 py-2">
+                <option value="unconfirmed">Unconfirmed</option>
+                <option value="confirmed">Confirmed</option>
+              </select>
             </div>
             <button type="submit" className="rounded-lg bg-navy-900 px-4 py-2 text-sm font-medium text-white hover:bg-navy-800">
               Add visit

@@ -33,6 +33,7 @@ const defaultSettings: AppSettings = {
   expense_item_required: false,
   expense_description_required: true,
   big_debt_threshold: 1000,
+  visit_provider_required: false,
 }
 
 const SettingsContext = createContext<SettingsContextValue | undefined>(undefined)
@@ -69,6 +70,7 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
         expense_item_required: data.expense_item_required ?? false,
         expense_description_required: data.expense_description_required ?? true,
         big_debt_threshold: data.big_debt_threshold ?? 1000,
+        visit_provider_required: data.visit_provider_required ?? false,
       })
     }
     setLoading(false)

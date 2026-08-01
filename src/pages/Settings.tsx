@@ -52,6 +52,7 @@ export default function Settings() {
 
   const [weekStartDay, setWeekStartDay] = useState(settings.week_start_day)
   const [defaultDuration, setDefaultDuration] = useState(settings.default_visit_duration_minutes)
+  const [visitProviderRequired, setVisitProviderRequired] = useState(settings.visit_provider_required)
   const [savingCalendar, setSavingCalendar] = useState(false)
 
   const [providers, setProviders] = useState<Provider[]>([])
@@ -106,6 +107,7 @@ export default function Settings() {
     setAutoGenerate(settings.auto_generate_file_number)
     setWeekStartDay(settings.week_start_day)
     setDefaultDuration(settings.default_visit_duration_minutes)
+    setVisitProviderRequired(settings.visit_provider_required)
     setCurrency(settings.currency)
     setDefaultCountry(settings.default_country ?? '')
     setDefaultNationality(settings.default_nationality ?? '')
@@ -381,7 +383,10 @@ export default function Settings() {
   async function handleSaveCalendar(e: FormEvent<HTMLFormElement>) {
     e.preventDefault()
     setSavingCalendar(true)
-    const { error } = await supabase.from('app_settings').update({ week_start_day: weekStartDay, default_visit_duration_minutes: defaultDuration }).eq('id', true)
+    const { error } = await supabase
+      .from('app_settings')
+      .update({ week_start_day: weekStartDay, default_visit_duration_minutes: defaultDuration, visit_provider_required: visitProviderRequired })
+      .eq('id', true)
     setSavingCalendar(false)
     if (error) alert(error.message)
     else await refresh()
@@ -616,6 +621,16 @@ export default function Settings() {
               </select>
             </div>
           </div>
+
+          <div className="border-t border-slate-100 pt-3">
+            <h3 className="mb-1 text-sm font-medium text-navy-900">Required when adding a visit</h3>
+            <label className="flex items-center gap-2 text-sm text-navy-800">
+              <input type="checkbox" checked={visitProviderRequired} onChange={(e) => setVisitProviderRequired(e.target.checked)} />
+              Require a provider on every visit
+            </label>
+            <p className="mt-0.5 text-[11px] text-slate-400">When on, a visit can't be saved without choosing a provider (doctor).</p>
+          </div>
+
           <button type="submit" disabled={savingCalendar} className="rounded-lg bg-navy-900 px-4 py-2 text-sm font-medium text-white hover:bg-navy-800 disabled:opacity-50">
             {savingCalendar ? 'Saving…' : 'Save'}
           </button>

@@ -86,16 +86,21 @@ export default function NewVisit() {
     e.preventDefault()
     if (!selectedPatient) return
     const form = new FormData(e.currentTarget)
+    const providerId = (form.get('provider_id') as string) || null
+    if (settings.visit_provider_required && !providerId) {
+      alert('Please choose a provider for this visit.')
+      return
+    }
     setScheduling(true)
     const clinicLocation = selectedPatient.primary_location_id ?? locationIds[0] ?? locations[0]?.id
     const { error } = await supabase.from('visits').insert({
       patient_id: selectedPatient.id,
       location_id: clinicLocation,
-      provider_id: form.get('provider_id') || null,
+      provider_id: providerId,
       scheduled_at: form.get('scheduled_at'),
       duration_minutes: Number(form.get('duration_minutes')),
       notes: form.get('notes') || null,
-      status: 'unconfirmed',
+      status: (form.get('status') as string) || 'unconfirmed',
     })
     setScheduling(false)
     if (error) {
@@ -204,15 +209,22 @@ export default function NewVisit() {
                 ))}
               </select>
             </div>
-            <div className="sm:col-span-2">
-              <label className="mb-1 block text-sm text-slate-600">Provider (for this appointment)</label>
+            <div>
+              <label className="mb-1 block text-sm text-slate-600">Provider (for this appointment){settings.visit_provider_required ? ' *' : ''}</label>
               <select name="provider_id" defaultValue={selectedPatient.provider_id ?? ''} className="w-full rounded-lg border border-slate-300 px-3 py-2">
-                <option value="">No provider</option>
+                <option value="">{settings.visit_provider_required ? '— Select a provider —' : 'No provider'}</option>
                 {providers.map((pr) => (
                   <option key={pr.id} value={pr.id}>
                     {providerFullName(pr)}
                   </option>
                 ))}
+              </select>
+            </div>
+            <div>
+              <label className="mb-1 block text-sm text-slate-600">Status</label>
+              <select name="status" defaultValue="unconfirmed" className="w-full rounded-lg border border-slate-300 px-3 py-2">
+                <option value="unconfirmed">Unconfirmed</option>
+                <option value="confirmed">Confirmed</option>
               </select>
             </div>
             <div className="sm:col-span-2">
