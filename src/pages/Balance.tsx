@@ -129,6 +129,25 @@ type OutstandingRow = {
   lastActivity: string | null
 }
 
+// Supabase caps any single request at 1000 rows. To get correct all-time totals
+// we page through the full result set in 1000-row batches. `buildQuery` must
+// return a FRESH query each call (a builder can't be reused after awaiting).
+async function fetchAllRows<T>(buildQuery: () => any): Promise<T[]> {
+  const step = 1000
+  const all: T[] = []
+  for (let from = 0; ; from += step) {
+    const { data, error } = await buildQuery().range(from, from + step - 1)
+    if (error) {
+      console.error(error)
+      break
+    }
+    const chunk = (data as T[]) ?? []
+    all.push(...chunk)
+    if (chunk.length < step) break
+  }
+  return all
+}
+
 export default function Balance() {
   const { session } = useAuth()
   const { settings } = useSettings()
@@ -146,7 +165,7 @@ export default function Balance() {
   const [myName, setMyName] = useState('') // display name of the logged-in user, stamped on new expenses
   const [editingExpenseId, setEditingExpenseId] = useState<string | null>(null)
   const [editingMiscId, setEditingMiscId] = useState<string | null>(null)
-  const [expensePage, setExpensePage] = useState(1)
+  const [page, setPage] = useState(1)
   const [loading, setLoading] = useState(true)
   const [outstanding, setOutstanding] = useState<OutstandingRow[]>([])
   const [outstandingLoading, setOutstandingLoading] = useState(false)
@@ -185,11 +204,14 @@ export default function Balance() {
     setOutstandingLoading(true)
     // Every ledger entry, rolled up per patient. Charges add to the balance;
     // payments and discounts reduce it — so discounts correctly lower what is owed.
-    const { data } = await supabase
-      .from('ledger_entries')
-      .select('patient_id, entry_type, amount, occurred_at, patients(id, first_name, middle_name, last_name, phone)')
+    const data = await fetchAllRows<any>(() =>
+      supabase
+        .from('ledger_entries')
+        .select('patient_id, entry_type, amount, occurred_at, patients(id, first_name, middle_name, last_name, phone)')
+        .order('id', { ascending: true }),
+    )
     const byPatient = new Map<string, OutstandingRow>()
-    for (const row of (data as any[]) ?? []) {
+    for (const row of data) {
       if (!row.patient_id) continue
       const p = row.patients
       const ex =
@@ -231,29 +253,45 @@ export default function Balance() {
       return
     }
 
-    let incomeQuery = supabase
-      .from('ledger_entries')
-      .select('*, patients(id, first_name, middle_name, last_name)')
-      .eq('entry_type', 'payment')
-      .order('occurred_at', { ascending: false })
-    if (from) incomeQuery = incomeQuery.gte('occurred_at', from.toISOString())
-    if (to) incomeQuery = incomeQuery.lte('occurred_at', to.toISOString())
+    // Each list is fetched in full via 1000-row batches so period totals are
+    // correct even across thousands of rows. A stable secondary sort by id keeps
+    // paging deterministic when many rows share the same timestamp.
+    const buildIncome = () => {
+      let q = supabase
+        .from('ledger_entries')
+        .select('*, patients(id, first_name, middle_name, last_name)')
+        .eq('entry_type', 'payment')
+        .order('occurred_at', { ascending: false })
+        .order('id', { ascending: true })
+      if (from) q = q.gte('occurred_at', from.toISOString())
+      if (to) q = q.lte('occurred_at', to.toISOString())
+      return q
+    }
+    const buildExpense = () => {
+      let q = supabase
+        .from('expenses')
+        .select('*, provider:providers(first_name,last_name)')
+        .order('occurred_at', { ascending: false })
+        .order('id', { ascending: true })
+      if (from) q = q.gte('occurred_at', from.toISOString())
+      if (to) q = q.lte('occurred_at', to.toISOString())
+      return q
+    }
+    const buildMisc = () => {
+      let q = supabase.from('misc_income').select('*').order('occurred_at', { ascending: false }).order('id', { ascending: true })
+      if (from) q = q.gte('occurred_at', from.toISOString())
+      if (to) q = q.lte('occurred_at', to.toISOString())
+      return q
+    }
 
-    let expenseQuery = supabase
-      .from('expenses')
-      .select('*, provider:providers(first_name,last_name)')
-      .order('occurred_at', { ascending: false })
-    if (from) expenseQuery = expenseQuery.gte('occurred_at', from.toISOString())
-    if (to) expenseQuery = expenseQuery.lte('occurred_at', to.toISOString())
-
-    let miscQuery = supabase.from('misc_income').select('*').order('occurred_at', { ascending: false })
-    if (from) miscQuery = miscQuery.gte('occurred_at', from.toISOString())
-    if (to) miscQuery = miscQuery.lte('occurred_at', to.toISOString())
-
-    const [{ data: incomeData }, { data: expenseData }, { data: miscData }] = await Promise.all([incomeQuery, expenseQuery, miscQuery])
-    setIncome((incomeData as unknown as IncomeRow[]) ?? [])
-    setExpenses((expenseData as unknown as ExpenseRow[]) ?? [])
-    setMiscIncome((miscData as MiscIncome[]) ?? [])
+    const [incomeData, expenseData, miscData] = await Promise.all([
+      fetchAllRows<IncomeRow>(buildIncome),
+      fetchAllRows<ExpenseRow>(buildExpense),
+      fetchAllRows<MiscIncome>(buildMisc),
+    ])
+    setIncome(incomeData)
+    setExpenses(expenseData)
+    setMiscIncome(miscData)
     setLoading(false)
   }
 
@@ -387,12 +425,10 @@ export default function Balance() {
   const expensesTotal = expenses.reduce((sum, r) => sum + Number(r.amount), 0)
   const net = incomeTotal - expensesTotal
 
-  const expPageSize = settings.rows_per_page || 25
-  const expTotalPages = Math.max(1, Math.ceil(expenses.length / expPageSize))
-  const expPage = Math.min(expensePage, expTotalPages)
-  const pagedExpenses = expenses.slice((expPage - 1) * expPageSize, expPage * expPageSize)
+  // Rows-per-page comes from the global setting and applies to every tab.
+  const pageSize = settings.rows_per_page || 25
   useEffect(() => {
-    setExpensePage(1)
+    setPage(1)
   }, [period, customFrom, customTo, tab])
 
   const cashItems: CashItem[] = useMemo(() => {
@@ -426,6 +462,46 @@ export default function Balance() {
     ]
     return items.sort((a, b) => b.when.localeCompare(a.when))
   }, [income, miscIncome, expenses])
+
+  // Income tab shows patient payments and other income together, newest first.
+  const incomeItems = useMemo(() => {
+    const merged: ({ kind: 'payment'; when: string; row: IncomeRow } | { kind: 'misc'; when: string; row: MiscIncome })[] = [
+      ...income.map((r) => ({ kind: 'payment' as const, when: r.occurred_at, row: r })),
+      ...miscIncome.map((r) => ({ kind: 'misc' as const, when: r.occurred_at, row: r })),
+    ]
+    return merged.sort((a, b) => b.when.localeCompare(a.when))
+  }, [income, miscIncome])
+
+  // Client-side pagination shared by all tabs, driven by the global page size.
+  const paginate = <T,>(arr: T[]) => {
+    const totalPages = Math.max(1, Math.ceil(arr.length / pageSize))
+    const p = Math.min(page, totalPages)
+    return { items: arr.slice((p - 1) * pageSize, p * pageSize), totalPages, p, total: arr.length }
+  }
+  const pagedCash = paginate(cashItems)
+  const pagedIncome = paginate(incomeItems)
+  const pagedExpenses = paginate(expenses)
+  const pagedOutstanding = paginate(outstanding)
+
+  const Pager = ({ p, totalPages, total }: { p: number; totalPages: number; total: number }) =>
+    total > pageSize ? (
+      <div className="flex flex-wrap items-center justify-between gap-3 text-sm text-slate-600">
+        <span>
+          Showing {(p - 1) * pageSize + 1}–{Math.min(p * pageSize, total)} of {total}
+        </span>
+        <div className="flex items-center gap-2">
+          <button onClick={() => setPage((x) => Math.max(1, x - 1))} disabled={p <= 1} className="rounded-lg border border-slate-300 px-3 py-1.5 hover:bg-slate-50 disabled:opacity-40">
+            ← Prev
+          </button>
+          <span className="px-1">
+            Page {p} of {totalPages}
+          </span>
+          <button onClick={() => setPage((x) => Math.min(totalPages, x + 1))} disabled={p >= totalPages} className="rounded-lg border border-slate-300 px-3 py-1.5 hover:bg-slate-50 disabled:opacity-40">
+            Next →
+          </button>
+        </div>
+      </div>
+    ) : null
 
   return (
     <div className="space-y-6">
@@ -496,7 +572,7 @@ export default function Balance() {
             ) : outstanding.length === 0 ? (
               <p className="p-4 text-sm text-slate-500">No patient currently owes a balance. 🎉</p>
             ) : (
-              outstanding.map((r) => {
+              pagedOutstanding.items.map((r) => {
                 const tel = telHref(r.phone)
                 const wa = whatsappHref(r.phone)
                 return (
@@ -528,6 +604,7 @@ export default function Balance() {
               })
             )}
           </div>
+          {!outstandingLoading && <Pager p={pagedOutstanding.p} totalPages={pagedOutstanding.totalPages} total={pagedOutstanding.total} />}
         </div>
       ) : loading ? (
         <p className="text-slate-500">Loading…</p>
@@ -549,7 +626,7 @@ export default function Balance() {
           </div>
           <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
             {cashItems.length === 0 && <p className="p-4 text-sm text-slate-500">No transactions in this period.</p>}
-            {cashItems.map((it) => {
+            {pagedCash.items.map((it) => {
               const row = (
                 <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3 last:border-0 hover:bg-slate-50">
                   <div>
@@ -573,6 +650,7 @@ export default function Balance() {
               )
             })}
           </div>
+          <Pager p={pagedCash.p} totalPages={pagedCash.totalPages} total={pagedCash.total} />
         </div>
       ) : tab === 'income' ? (
         <div className="space-y-4">
@@ -581,29 +659,28 @@ export default function Balance() {
             <p className="text-2xl font-semibold text-green-600">{money(incomeTotal)}</p>
           </div>
           <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
-            {income.length === 0 && miscIncome.length === 0 && <p className="p-4 text-sm text-slate-500">No income in this period.</p>}
-            {income.map((r) => (
-              <Link
-                key={r.id}
-                to={r.patients ? `/patients/${r.patients.id}` : '#'}
-                className="flex items-center justify-between border-b border-slate-100 px-4 py-3 last:border-0 hover:bg-slate-50"
-              >
-                <div>
-                  <p className="font-medium text-navy-900">{r.patients ? patientFullName(r.patients) : 'Unknown patient'}</p>
-                  <p className="text-xs text-slate-400">
-                    {formatDateTime(r.occurred_at)} · {PAYMENT_METHOD_LABELS[(r.payment_method ?? 'other') as PaymentMethod]}
-                  </p>
-                </div>
-                <p className="font-medium text-green-600">+{money(Number(r.amount))}</p>
-              </Link>
-            ))}
-            {miscIncome.map((r) =>
-              editingMiscId === r.id ? (
-                <form key={r.id} onSubmit={(ev) => handleSaveMiscEdit(ev, r)} className="space-y-2 border-b border-slate-100 px-4 py-3 last:border-0">
-                  <input name="description" defaultValue={r.description} placeholder="Description" className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+            {incomeItems.length === 0 && <p className="p-4 text-sm text-slate-500">No income in this period.</p>}
+            {pagedIncome.items.map((it) =>
+              it.kind === 'payment' ? (
+                <Link
+                  key={`pay-${it.row.id}`}
+                  to={it.row.patients ? `/patients/${it.row.patients.id}` : '#'}
+                  className="flex items-center justify-between border-b border-slate-100 px-4 py-3 last:border-0 hover:bg-slate-50"
+                >
+                  <div>
+                    <p className="font-medium text-navy-900">{it.row.patients ? patientFullName(it.row.patients) : 'Unknown patient'}</p>
+                    <p className="text-xs text-slate-400">
+                      {formatDateTime(it.row.occurred_at)} · {PAYMENT_METHOD_LABELS[(it.row.payment_method ?? 'other') as PaymentMethod]}
+                    </p>
+                  </div>
+                  <p className="font-medium text-green-600">+{money(Number(it.row.amount))}</p>
+                </Link>
+              ) : editingMiscId === it.row.id ? (
+                <form key={`misc-${it.row.id}`} onSubmit={(ev) => handleSaveMiscEdit(ev, it.row)} className="space-y-2 border-b border-slate-100 px-4 py-3 last:border-0">
+                  <input name="description" defaultValue={it.row.description} placeholder="Description" className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
                   <div className="grid gap-2 sm:grid-cols-2">
-                    <input name="amount" type="number" step="0.01" required defaultValue={r.amount} className="rounded-lg border border-slate-300 px-3 py-2 text-sm" />
-                    <input name="occurred_at" type="datetime-local" defaultValue={toDatetimeLocal(r.occurred_at)} className="rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+                    <input name="amount" type="number" step="0.01" required defaultValue={it.row.amount} className="rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+                    <input name="occurred_at" type="datetime-local" defaultValue={toDatetimeLocal(it.row.occurred_at)} className="rounded-lg border border-slate-300 px-3 py-2 text-sm" />
                   </div>
                   <div className="flex gap-2">
                     <button type="submit" className="rounded-lg bg-navy-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-navy-800">
@@ -615,19 +692,19 @@ export default function Balance() {
                   </div>
                 </form>
               ) : (
-                <div key={r.id} className="flex items-center justify-between gap-3 border-b border-slate-100 px-4 py-3 last:border-0">
+                <div key={`misc-${it.row.id}`} className="flex items-center justify-between gap-3 border-b border-slate-100 px-4 py-3 last:border-0">
                   <div className="min-w-0">
-                    <p className="font-medium text-navy-900">{r.description}</p>
+                    <p className="font-medium text-navy-900">{it.row.description}</p>
                     <p className="text-xs text-slate-400">
-                      {formatDateTime(r.occurred_at)} · Other income{r.category ? ` · ${r.category}` : ''}
+                      {formatDateTime(it.row.occurred_at)} · Other income{it.row.category ? ` · ${it.row.category}` : ''}
                     </p>
                   </div>
                   <div className="flex shrink-0 items-center gap-3">
-                    <p className="font-medium text-green-600">+{money(Number(r.amount))}</p>
-                    <button onClick={() => setEditingMiscId(r.id)} className="text-xs font-medium text-navy-700 hover:underline">
+                    <p className="font-medium text-green-600">+{money(Number(it.row.amount))}</p>
+                    <button onClick={() => setEditingMiscId(it.row.id)} className="text-xs font-medium text-navy-700 hover:underline">
                       Edit
                     </button>
-                    <button onClick={() => handleDeleteMisc(r.id)} className="text-xs text-red-600 hover:underline">
+                    <button onClick={() => handleDeleteMisc(it.row.id)} className="text-xs text-red-600 hover:underline">
                       Delete
                     </button>
                   </div>
@@ -635,6 +712,7 @@ export default function Balance() {
               ),
             )}
           </div>
+          <Pager p={pagedIncome.p} totalPages={pagedIncome.totalPages} total={pagedIncome.total} />
         </div>
       ) : (
         <div className="space-y-4">
@@ -741,7 +819,7 @@ export default function Balance() {
 
           <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
             {expenses.length === 0 && <p className="p-4 text-sm text-slate-500">No expenses in this period.</p>}
-            {pagedExpenses.map((e) =>
+            {pagedExpenses.items.map((e) =>
               editingExpenseId === e.id ? (
                 <form key={e.id} onSubmit={(ev) => handleSaveExpenseEdit(ev, e)} className="space-y-2 border-b border-slate-100 px-4 py-3 last:border-0">
                   <input name="description" defaultValue={e.description} placeholder="Description" className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
@@ -817,22 +895,7 @@ export default function Balance() {
               ),
             )}
           </div>
-          {expenses.length > expPageSize && (
-            <div className="flex flex-wrap items-center justify-between gap-3 text-sm text-slate-600">
-              <span>
-                Showing {(expPage - 1) * expPageSize + 1}–{Math.min(expPage * expPageSize, expenses.length)} of {expenses.length}
-              </span>
-              <div className="flex items-center gap-2">
-                <button onClick={() => setExpensePage((p) => Math.max(1, p - 1))} disabled={expPage <= 1} className="rounded-lg border border-slate-300 px-3 py-1.5 hover:bg-slate-50 disabled:opacity-40">
-                  ← Prev
-                </button>
-                <span className="px-1">Page {expPage} of {expTotalPages}</span>
-                <button onClick={() => setExpensePage((p) => Math.min(expTotalPages, p + 1))} disabled={expPage >= expTotalPages} className="rounded-lg border border-slate-300 px-3 py-1.5 hover:bg-slate-50 disabled:opacity-40">
-                  Next →
-                </button>
-              </div>
-            </div>
-          )}
+          <Pager p={pagedExpenses.p} totalPages={pagedExpenses.totalPages} total={pagedExpenses.total} />
         </div>
       )}
     </div>
