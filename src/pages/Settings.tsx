@@ -92,6 +92,7 @@ export default function Settings() {
   const [salaryRounding, setSalaryRounding] = useState(settings.salary_rounding)
   const [weeklyOffDay, setWeeklyOffDay] = useState(settings.weekly_off_day)
   const [lateGraceMinutes, setLateGraceMinutes] = useState(settings.late_grace_minutes)
+  const [bigDebtThreshold, setBigDebtThreshold] = useState(settings.big_debt_threshold)
   const [savingFinancial, setSavingFinancial] = useState(false)
 
   const [importing, setImporting] = useState(false)
@@ -117,6 +118,7 @@ export default function Settings() {
     setSalaryRounding(settings.salary_rounding)
     setWeeklyOffDay(settings.weekly_off_day)
     setLateGraceMinutes(settings.late_grace_minutes)
+    setBigDebtThreshold(settings.big_debt_threshold)
   }, [settings])
 
   useEffect(() => {
@@ -345,6 +347,7 @@ export default function Settings() {
         salary_rounding: salaryRounding,
         weekly_off_day: weeklyOffDay,
         late_grace_minutes: lateGraceMinutes,
+        big_debt_threshold: bigDebtThreshold,
       })
       .eq('id', true)
     setSavingFinancial(false)
@@ -837,6 +840,11 @@ export default function Settings() {
             <div>
               <label className="mb-1 block text-sm text-slate-500">Default nationality (new patients)</label>
               <input value={defaultNationality} onChange={(e) => setDefaultNationality(e.target.value)} list="settings-country-options" className="w-full rounded-lg border border-slate-300 px-3 py-2" />
+            </div>
+            <div>
+              <label className="mb-1 block text-sm text-slate-500">“Owes a lot” threshold ({currency || 'EGP'})</label>
+              <input type="number" min="0" step="1" value={bigDebtThreshold} onChange={(e) => setBigDebtThreshold(Number(e.target.value))} className="w-full rounded-lg border border-slate-300 px-3 py-2" />
+              <p className="mt-0.5 text-[11px] text-slate-400">Patients owing this amount or more get an amber “owes a lot” tag on the Dashboard.</p>
             </div>
           </div>
           <datalist id="settings-country-options">

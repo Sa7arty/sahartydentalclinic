@@ -20,8 +20,6 @@ function endOfMonth(d: Date) {
 }
 const emptyStats: Stats = { visits: 0, revenue: 0, expenses: 0, netProfit: 0, newPatients: 0, discounts: 0 }
 const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
-// Balances at or above this are highlighted as "owing a lot".
-const BIG_DEBT_THRESHOLD = 1000
 
 export default function Dashboard() {
   const { settings } = useSettings()
@@ -253,7 +251,7 @@ export default function Dashboard() {
               >
                 <p className="font-medium text-navy-900">
                   {b.full_name}
-                  {b.balance >= BIG_DEBT_THRESHOLD && <span className="ml-2 rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800">owes a lot</span>}
+                  {b.balance >= settings.big_debt_threshold && <span className="ml-2 rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800">owes a lot</span>}
                 </p>
                 <p className="font-medium text-gold-600">{settings.currency} {b.balance.toFixed(2)}</p>
               </Link>
