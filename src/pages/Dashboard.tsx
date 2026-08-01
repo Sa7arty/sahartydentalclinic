@@ -21,6 +21,25 @@ function endOfMonth(d: Date) {
 const emptyStats: Stats = { visits: 0, revenue: 0, expenses: 0, netProfit: 0, newPatients: 0, discounts: 0 }
 const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
 
+// Supabase caps a single request at 1000 rows. To roll up the whole ledger for
+// outstanding balances we page through it in 1000-row batches. `buildQuery` must
+// return a FRESH query each call (a builder can't be reused after awaiting).
+async function fetchAllRows<T>(buildQuery: () => any): Promise<T[]> {
+  const step = 1000
+  const all: T[] = []
+  for (let from = 0; ; from += step) {
+    const { data, error } = await buildQuery().range(from, from + step - 1)
+    if (error) {
+      console.error(error)
+      break
+    }
+    const chunk = (data as T[]) ?? []
+    all.push(...chunk)
+    if (chunk.length < step) break
+  }
+  return all
+}
+
 export default function Dashboard() {
   const { settings } = useSettings()
   const [todaysVisits, setTodaysVisits] = useState<VisitRow[]>([])
@@ -57,7 +76,7 @@ export default function Dashboard() {
     const lastWeekEnd = new Date(weekStart)
     lastWeekEnd.setMilliseconds(-1)
 
-    const [{ data: todays }, { data: tomorrows }, { data: ledgerRows }, todayData, yesterdayData, weekData, lastWeekData, monthData] = await Promise.all([
+    const [{ data: todays }, { data: tomorrows }, ledgerRows, todayData, yesterdayData, weekData, lastWeekData, monthData] = await Promise.all([
       supabase
         .from('visits')
         .select('*, patient:patients(id, first_name, middle_name, last_name, phone), location:locations(name)')
@@ -70,7 +89,7 @@ export default function Dashboard() {
         .gte('scheduled_at', dayStart(toYmd(tomorrow)).toISOString())
         .lte('scheduled_at', dayEnd(toYmd(tomorrow)).toISOString())
         .order('scheduled_at', { ascending: true }),
-      supabase.from('ledger_entries').select('patient_id, entry_type, amount, patients(title, first_name, middle_name, last_name)').range(0, 99999),
+      fetchAllRows<any>(() => supabase.from('ledger_entries').select('patient_id, entry_type, amount, patients(title, first_name, middle_name, last_name)').order('id', { ascending: true })),
       loadStats(dayStart(toYmd(now)), dayEnd(toYmd(now))),
       loadStats(dayStart(toYmd(yesterday)), dayEnd(toYmd(yesterday))),
       loadStats(weekStart, now),
@@ -87,7 +106,7 @@ export default function Dashboard() {
     setMonthStats(monthData)
 
     const byPatient = new Map<string, BalanceRow>()
-    for (const row of (ledgerRows as any[]) ?? []) {
+    for (const row of ledgerRows ?? []) {
       const key = row.patient_id
       const existing = byPatient.get(key) ?? {
         patient_id: key,
