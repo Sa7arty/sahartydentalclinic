@@ -10,7 +10,7 @@ type VisitRow = Visit & {
   location: Pick<Location, 'name'> | null
 }
 type BalanceRow = { patient_id: string; full_name: string; balance: number }
-type Stats = { visits: number; revenue: number; expenses: number; netProfit: number; newPatients: number }
+type Stats = { visits: number; revenue: number; expenses: number; netProfit: number; newPatients: number; discounts: number }
 
 function startOfMonth(d: Date) {
   return new Date(d.getFullYear(), d.getMonth(), 1)
@@ -18,7 +18,7 @@ function startOfMonth(d: Date) {
 function endOfMonth(d: Date) {
   return new Date(d.getFullYear(), d.getMonth() + 1, 0, 23, 59, 59, 999)
 }
-const emptyStats: Stats = { visits: 0, revenue: 0, expenses: 0, netProfit: 0, newPatients: 0 }
+const emptyStats: Stats = { visits: 0, revenue: 0, expenses: 0, netProfit: 0, newPatients: 0, discounts: 0 }
 const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
 // Balances at or above this are highlighted as "owing a lot".
 const BIG_DEBT_THRESHOLD = 1000
@@ -105,15 +105,17 @@ export default function Dashboard() {
   }
 
   async function loadStats(from: Date, to: Date): Promise<Stats> {
-    const [{ count: visits }, { data: payments }, { data: expenseRows }, { count: newPatients }] = await Promise.all([
+    const [{ count: visits }, { data: payments }, { data: expenseRows }, { count: newPatients }, { data: discountRows }] = await Promise.all([
       supabase.from('visits').select('id', { count: 'exact', head: true }).gte('scheduled_at', from.toISOString()).lte('scheduled_at', to.toISOString()),
       supabase.from('ledger_entries').select('amount').eq('entry_type', 'payment').gte('occurred_at', from.toISOString()).lte('occurred_at', to.toISOString()).range(0, 99999),
       supabase.from('expenses').select('amount').gte('expense_date', toYmd(from)).lte('expense_date', toYmd(to)).range(0, 99999),
       supabase.from('patients').select('id', { count: 'exact', head: true }).gte('created_at', from.toISOString()).lte('created_at', to.toISOString()),
+      supabase.from('ledger_entries').select('amount').eq('entry_type', 'discount').gte('occurred_at', from.toISOString()).lte('occurred_at', to.toISOString()).range(0, 99999),
     ])
     const revenue = (payments ?? []).reduce((sum, p: any) => sum + Number(p.amount), 0)
     const expenseTotal = (expenseRows ?? []).reduce((sum, e: any) => sum + Number(e.amount), 0)
-    return { visits: visits ?? 0, revenue, expenses: expenseTotal, netProfit: revenue - expenseTotal, newPatients: newPatients ?? 0 }
+    const discounts = (discountRows ?? []).reduce((sum, d: any) => sum + Number(d.amount), 0)
+    return { visits: visits ?? 0, revenue, expenses: expenseTotal, netProfit: revenue - expenseTotal, newPatients: newPatients ?? 0, discounts }
   }
 
   if (loading) return <p className="text-navy-700">Loading dashboard…</p>
@@ -181,10 +183,11 @@ export default function Dashboard() {
       { label: 'Revenue', value: money(stats.revenue), cur: stats.revenue, prev: compare?.revenue, good: true, cls: 'text-green-600' },
       { label: 'Expenses', value: money(stats.expenses), cur: stats.expenses, prev: compare?.expenses, good: false, cls: 'text-red-600' },
       { label: 'Net profit', value: money(stats.netProfit), cur: stats.netProfit, prev: compare?.netProfit, good: true, cls: stats.netProfit >= 0 ? 'text-green-600' : 'text-red-600' },
+      { label: 'Discounts given', value: money(stats.discounts), cur: stats.discounts, prev: compare?.discounts, good: false, cls: 'text-amber-600' },
       { label: 'New patients', value: String(stats.newPatients), cur: stats.newPatients, prev: compare?.newPatients, good: true, cls: 'text-navy-900' },
     ]
     return (
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
         {tiles.map((t) => (
           <div key={t.label} className="rounded-xl border border-slate-200 bg-white p-4">
             <p className="text-xs text-slate-500">{t.label}</p>
@@ -241,7 +244,7 @@ export default function Dashboard() {
         {balances.length === 0 ? (
           <p className="text-sm text-slate-500">No patients currently owe a balance.</p>
         ) : (
-          <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+          <div className="max-h-[320px] overflow-y-auto rounded-xl border border-slate-200 bg-white">
             {balances.map((b) => (
               <Link
                 key={b.patient_id}
