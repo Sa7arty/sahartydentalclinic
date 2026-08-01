@@ -6,6 +6,26 @@ import { useSettings } from '../context/SettingsContext'
 import PatientForm from '../components/PatientForm'
 import { Patient, Location, Provider, PatientGroup, providerFullName, patientFullName, formatDobAge } from '../types'
 
+// Supabase caps a single request at 1000 rows. The clinic has more patients than
+// that, so we page through them in 1000-row batches — otherwise patients past the
+// first 1000 (alphabetically) can't be found when adding a visit. `buildQuery`
+// must return a FRESH query each call (a builder can't be reused after awaiting).
+async function fetchAllRows<T>(buildQuery: () => any): Promise<T[]> {
+  const step = 1000
+  const all: T[] = []
+  for (let from = 0; ; from += step) {
+    const { data, error } = await buildQuery().range(from, from + step - 1)
+    if (error) {
+      console.error(error)
+      break
+    }
+    const chunk = (data as T[]) ?? []
+    all.push(...chunk)
+    if (chunk.length < step) break
+  }
+  return all
+}
+
 export default function NewVisit() {
   const navigate = useNavigate()
   const { locationIds } = useAuth()
@@ -26,8 +46,10 @@ export default function NewVisit() {
 
   async function load() {
     setLoading(true)
-    const [{ data: p }, { data: l }, { data: pr }, { data: g }] = await Promise.all([
-      supabase.from('patients').select('*, provider:providers(first_name,last_name)').order('first_name'),
+    const [p, { data: l }, { data: pr }, { data: g }] = await Promise.all([
+      fetchAllRows<Patient>(() =>
+        supabase.from('patients').select('*, provider:providers(first_name,last_name)').order('first_name').order('id', { ascending: true }),
+      ),
       supabase.from('locations').select('*').order('name'),
       supabase.from('providers').select('*').eq('active', true).order('first_name'),
       supabase.from('patient_groups').select('*').order('name'),
