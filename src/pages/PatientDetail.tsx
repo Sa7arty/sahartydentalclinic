@@ -171,7 +171,9 @@ export default function PatientDetail() {
       patient_id: id,
       location_id: patient.primary_location_id,
       provider_id: providerId,
-      scheduled_at: form.get('scheduled_at'),
+      // Interpret the local datetime-local value and store as an ISO instant so
+      // the visit shows at the exact time that was picked (no timezone shift).
+      scheduled_at: new Date(form.get('scheduled_at') as string).toISOString(),
       status: (form.get('status') as string) || 'unconfirmed',
     })
     if (!error) load(id)

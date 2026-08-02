@@ -97,7 +97,9 @@ export default function NewVisit() {
       patient_id: selectedPatient.id,
       location_id: clinicLocation,
       provider_id: providerId,
-      scheduled_at: form.get('scheduled_at'),
+      // datetime-local has no timezone; interpret it as local time and store as
+      // a proper ISO instant so the Schedule shows the exact time that was picked.
+      scheduled_at: new Date(form.get('scheduled_at') as string).toISOString(),
       duration_minutes: Number(form.get('duration_minutes')),
       notes: form.get('notes') || null,
       status: (form.get('status') as string) || 'unconfirmed',
