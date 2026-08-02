@@ -378,6 +378,49 @@ export const VISIT_STATUS_COLORS: Record<VisitStatus, string> = {
   cancelled: 'bg-slate-200 text-slate-500 line-through',
 }
 
+// Row-level background highlight by status (day agenda + dashboard lists):
+// unconfirmed = light blue, missed = red, cancelled = yellow, confirmed = none.
+export function visitRowClass(status: VisitStatus): string {
+  switch (status) {
+    case 'unconfirmed':
+      return 'bg-sky-50 hover:bg-sky-100'
+    case 'missed':
+      return 'bg-red-50 hover:bg-red-100'
+    case 'cancelled':
+      return 'bg-yellow-50 hover:bg-yellow-100'
+    default:
+      return 'hover:bg-slate-50'
+  }
+}
+
+// Compact chip highlight by status (week/month cells).
+export function visitChipClass(status: VisitStatus): string {
+  switch (status) {
+    case 'unconfirmed':
+      return 'bg-sky-100 text-sky-800 hover:bg-sky-200'
+    case 'missed':
+      return 'bg-red-100 text-red-700 hover:bg-red-200'
+    case 'cancelled':
+      return 'bg-yellow-100 text-yellow-800 hover:bg-yellow-200'
+    default:
+      return 'bg-slate-100 text-navy-700 hover:bg-slate-200'
+  }
+}
+
+// Accent text colour for the patient name / status label in a row.
+export function visitTextClass(status: VisitStatus): string {
+  switch (status) {
+    case 'unconfirmed':
+      return 'text-sky-700'
+    case 'missed':
+      return 'text-red-700'
+    case 'cancelled':
+      return 'text-yellow-800'
+    default:
+      return 'text-navy-900'
+  }
+}
+
 export interface Visit {
   id: string
   patient_id: string

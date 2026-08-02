@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { useSettings } from '../context/SettingsContext'
-import { Visit, Patient, Location, Provider, patientFullName, providerFullName, telHref, whatsappHref } from '../types'
+import { Visit, Patient, Location, Provider, patientFullName, providerFullName, telHref, whatsappHref, visitRowClass, visitTextClass } from '../types'
 import { toYmd, fromYmd, startOfWeek, dayStart, dayEnd } from '../lib/dates'
 
 type VisitRow = Visit & {
@@ -148,11 +148,10 @@ export default function Dashboard() {
           {list.map((v) => {
             const tel = telHref(v.patient?.phone ?? null)
             const wa = whatsappHref(v.patient?.phone ?? null)
-            const isMissed = v.status === 'missed'
             return (
-              <div key={v.id} className={`flex items-center justify-between gap-2 border-b border-slate-100 px-4 py-3 last:border-0 ${isMissed ? 'bg-red-50 hover:bg-red-100' : 'hover:bg-slate-50'}`}>
+              <div key={v.id} className={`flex items-center justify-between gap-2 border-b border-slate-100 px-4 py-3 last:border-0 ${visitRowClass(v.status)}`}>
                 <Link to={`/patients/${v.patient?.id}`} className="min-w-0 flex-1">
-                  <p className={`truncate font-medium ${isMissed ? 'text-red-700' : 'text-navy-900'}`}>{v.patient ? patientFullName(v.patient) : 'Unknown patient'}</p>
+                  <p className={`truncate font-medium ${visitTextClass(v.status)}`}>{v.patient ? patientFullName(v.patient) : 'Unknown patient'}</p>
                   <p className="truncate text-xs text-slate-500">{v.provider ? providerFullName(v.provider) : 'No provider'}</p>
                 </Link>
                 {(tel || wa) && (
@@ -174,7 +173,7 @@ export default function Dashboard() {
                     {new Date(v.scheduled_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                     <span className="text-xs text-slate-400"> ({v.duration_minutes}min)</span>
                   </p>
-                  <p className={`text-xs font-medium capitalize ${isMissed ? 'text-red-600' : 'text-slate-500'}`}>{v.status}</p>
+                  <p className={`text-xs font-medium capitalize ${v.status === 'confirmed' ? 'text-slate-500' : visitTextClass(v.status)}`}>{v.status}</p>
                 </div>
               </div>
             )
