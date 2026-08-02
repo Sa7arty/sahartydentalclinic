@@ -398,7 +398,7 @@ function DayAgenda({
         const tel = telHref(v.patient?.phone ?? null)
         const wa = whatsappHref(v.patient?.phone ?? null)
         return (
-        <div key={v.id} className="flex items-center gap-4 border-b border-slate-100 px-4 py-3 last:border-0 hover:bg-slate-50">
+        <div key={v.id} className={`flex items-center gap-4 border-b border-slate-100 px-4 py-3 last:border-0 ${v.status === 'missed' ? 'bg-red-50 hover:bg-red-100' : 'hover:bg-slate-50'}`}>
           <div className="w-28 shrink-0 text-sm font-medium text-navy-700">
             <VisitTimeRange v={v} />
           </div>
@@ -507,9 +507,9 @@ function WeekView({
                 <button
                   key={v.id}
                   onClick={() => onEdit(v)}
-                  className="block w-full rounded-md bg-slate-50 px-2 py-1 text-left text-xs hover:bg-slate-100"
+                  className={`block w-full rounded-md px-2 py-1 text-left text-xs ${v.status === 'missed' ? 'bg-red-100 hover:bg-red-200' : 'bg-slate-50 hover:bg-slate-100'}`}
                 >
-                  <span className="font-medium text-navy-800">
+                  <span className={`font-medium ${v.status === 'missed' ? 'text-red-700' : 'text-navy-800'}`}>
                     <VisitTimeRange v={v} />
                   </span>
                   <br />
@@ -597,7 +597,7 @@ function MonthGrid({
                     <button
                       key={v.id}
                       onClick={() => onEdit(v)}
-                      className="flex w-full flex-wrap items-center gap-0.5 rounded bg-slate-100 px-1 py-0.5 text-left text-[10px] leading-tight text-navy-700 hover:bg-slate-200"
+                      className={`flex w-full flex-wrap items-center gap-0.5 rounded px-1 py-0.5 text-left text-[10px] leading-tight ${v.status === 'missed' ? 'bg-red-100 text-red-700 hover:bg-red-200' : 'bg-slate-100 text-navy-700 hover:bg-slate-200'}`}
                     >
                       <span className="truncate">{v.patient ? patientFullName(v.patient) : 'Unknown'}</span>
                       {v.patient && <PatientBadges patient={v.patient} elderlyAgeThreshold={elderlyThreshold} hasCondition={conditionIds.has(v.patient.id)} size="xs" />}

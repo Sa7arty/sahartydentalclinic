@@ -2,12 +2,13 @@ import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { useSettings } from '../context/SettingsContext'
-import { Visit, Patient, Location, patientFullName, telHref, whatsappHref } from '../types'
+import { Visit, Patient, Location, Provider, patientFullName, providerFullName, telHref, whatsappHref } from '../types'
 import { toYmd, fromYmd, startOfWeek, dayStart, dayEnd } from '../lib/dates'
 
 type VisitRow = Visit & {
   patient: Pick<Patient, 'id' | 'first_name' | 'middle_name' | 'last_name' | 'phone'> | null
   location: Pick<Location, 'name'> | null
+  provider: Pick<Provider, 'first_name' | 'last_name'> | null
 }
 type BalanceRow = { patient_id: string; full_name: string; balance: number }
 type Stats = { visits: number; revenue: number; expenses: number; netProfit: number; newPatients: number; discounts: number }
@@ -79,13 +80,13 @@ export default function Dashboard() {
     const [{ data: todays }, { data: tomorrows }, ledgerRows, todayData, yesterdayData, weekData, lastWeekData, monthData] = await Promise.all([
       supabase
         .from('visits')
-        .select('*, patient:patients(id, first_name, middle_name, last_name, phone), location:locations(name)')
+        .select('*, patient:patients(id, first_name, middle_name, last_name, phone), location:locations(name), provider:providers(first_name,last_name)')
         .gte('scheduled_at', dayStart(toYmd(now)).toISOString())
         .lte('scheduled_at', dayEnd(toYmd(now)).toISOString())
         .order('scheduled_at', { ascending: true }),
       supabase
         .from('visits')
-        .select('*, patient:patients(id, first_name, middle_name, last_name, phone), location:locations(name)')
+        .select('*, patient:patients(id, first_name, middle_name, last_name, phone), location:locations(name), provider:providers(first_name,last_name)')
         .gte('scheduled_at', dayStart(toYmd(tomorrow)).toISOString())
         .lte('scheduled_at', dayEnd(toYmd(tomorrow)).toISOString())
         .order('scheduled_at', { ascending: true }),
@@ -147,10 +148,12 @@ export default function Dashboard() {
           {list.map((v) => {
             const tel = telHref(v.patient?.phone ?? null)
             const wa = whatsappHref(v.patient?.phone ?? null)
+            const isMissed = v.status === 'missed'
             return (
-              <div key={v.id} className="flex items-center justify-between gap-2 border-b border-slate-100 px-4 py-3 last:border-0 hover:bg-slate-50">
+              <div key={v.id} className={`flex items-center justify-between gap-2 border-b border-slate-100 px-4 py-3 last:border-0 ${isMissed ? 'bg-red-50 hover:bg-red-100' : 'hover:bg-slate-50'}`}>
                 <Link to={`/patients/${v.patient?.id}`} className="min-w-0 flex-1">
-                  <p className="truncate font-medium text-navy-900">{v.patient ? patientFullName(v.patient) : 'Unknown patient'}</p>
+                  <p className={`truncate font-medium ${isMissed ? 'text-red-700' : 'text-navy-900'}`}>{v.patient ? patientFullName(v.patient) : 'Unknown patient'}</p>
+                  <p className="truncate text-xs text-slate-500">{v.provider ? providerFullName(v.provider) : 'No provider'}</p>
                 </Link>
                 {(tel || wa) && (
                   <div className="flex shrink-0 flex-col gap-1">
@@ -171,7 +174,7 @@ export default function Dashboard() {
                     {new Date(v.scheduled_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                     <span className="text-xs text-slate-400"> ({v.duration_minutes}min)</span>
                   </p>
-                  <p className="text-xs capitalize text-slate-500">{v.status}</p>
+                  <p className={`text-xs font-medium capitalize ${isMissed ? 'text-red-600' : 'text-slate-500'}`}>{v.status}</p>
                 </div>
               </div>
             )
