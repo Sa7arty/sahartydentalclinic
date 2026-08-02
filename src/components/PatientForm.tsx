@@ -1,5 +1,6 @@
 import { FormEvent, ReactNode, useState } from 'react'
 import { Location, Provider, Patient, PatientGroup, providerFullName, MARITAL_STATUS_OPTIONS, PATIENT_TITLES } from '../types'
+import { supabase } from '../lib/supabase'
 import { useAuth } from '../context/AuthContext'
 import { useSettings } from '../context/SettingsContext'
 import { WORLD_COUNTRIES } from '../data/countries'
@@ -71,6 +72,52 @@ export default function PatientForm({ initial, locations, providers, groups, onC
       primary_location_id: clinicLocation,
     }
     if (form.get('file_number')) payload.file_number = form.get('file_number')
+
+    // On NEW patients, warn if someone with the same name or phone already exists,
+    // so we don't accidentally create duplicate files (as happened during imports).
+    if (isNew) {
+      const first = ((form.get('first_name') as string) || '').trim()
+      const last = ((form.get('last_name') as string) || '').trim()
+      const phone = ((form.get('phone') as string) || '').trim()
+      const seen = new Set<string>()
+      const dupes: any[] = []
+      const collect = (rows: any[] | null) => {
+        for (const m of rows ?? []) {
+          if (!seen.has(m.id)) {
+            seen.add(m.id)
+            dupes.push(m)
+          }
+        }
+      }
+      if (first && last) {
+        const { data } = await supabase
+          .from('patients')
+          .select('id, file_number, first_name, middle_name, last_name, phone')
+          .ilike('first_name', first)
+          .ilike('last_name', last)
+          .limit(10)
+        collect(data)
+      }
+      if (phone) {
+        const { data } = await supabase
+          .from('patients')
+          .select('id, file_number, first_name, middle_name, last_name, phone')
+          .eq('phone', phone)
+          .limit(10)
+        collect(data)
+      }
+      if (dupes.length > 0) {
+        const list = dupes
+          .slice(0, 6)
+          .map((m) => `• #${m.file_number ?? '—'}  ${[m.first_name, m.middle_name, m.last_name].filter(Boolean).join(' ')}${m.phone ? ` · ${m.phone}` : ''}`)
+          .join('\n')
+        const proceed = window.confirm(
+          `A patient with a matching name or phone already exists:\n\n${list}\n\nAdd this as a NEW, separate patient anyway?`,
+        )
+        if (!proceed) return
+      }
+    }
+
     setSubmitting(true)
     await onSubmit(payload)
     setSubmitting(false)

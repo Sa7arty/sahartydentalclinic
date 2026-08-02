@@ -54,6 +54,24 @@ export interface PatientAllergy {
   created_at: string
 }
 
+export interface PrescriptionItem {
+  drug: string
+  dosage: string
+  frequency: string
+  duration: string
+  instructions: string
+}
+
+export interface Prescription {
+  id: string
+  patient_id: string
+  prescriber_name: string | null
+  notes: string | null
+  items: PrescriptionItem[]
+  created_by: string | null
+  created_at: string
+}
+
 /** Common allergies relevant to dental care — datalist suggestions (free text still allowed). */
 export const COMMON_ALLERGIES: string[] = [
   'Penicillin',

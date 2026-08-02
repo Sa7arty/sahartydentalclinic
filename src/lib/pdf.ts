@@ -1,5 +1,70 @@
 import jsPDF from 'jspdf'
-import { LedgerEntry, Patient, patientFullName } from '../types'
+import { LedgerEntry, Patient, PrescriptionItem, patientFullName } from '../types'
+
+export function exportPrescriptionPdf(
+  patient: Patient,
+  prescriberName: string,
+  items: PrescriptionItem[],
+  notes: string,
+  dateLabel: string,
+) {
+  const doc = new jsPDF()
+
+  doc.setFontSize(16)
+  doc.text('Saharty Dental Clinic', 14, 18)
+  doc.setFontSize(12)
+  doc.text('Prescription (Rx)', 14, 26)
+
+  doc.setFontSize(10)
+  doc.text(`Patient: ${patientFullName(patient)}`, 14, 40)
+  doc.text(`File #: ${patient.file_number ?? '-'}`, 14, 46)
+  doc.text(`Date: ${dateLabel}`, 140, 40)
+  if (prescriberName) doc.text(`Prescriber: ${prescriberName}`, 140, 46)
+  doc.line(14, 52, 196, 52)
+
+  // Big Rx symbol
+  doc.setFontSize(22)
+  doc.setFont('helvetica', 'bold')
+  doc.text('℞', 14, 66)
+  doc.setFont('helvetica', 'normal')
+
+  let y = 66
+  doc.setFontSize(11)
+  items.forEach((it, i) => {
+    if (y > 250) {
+      doc.addPage()
+      y = 30
+    }
+    doc.setFont('helvetica', 'bold')
+    const dose = [it.dosage, it.frequency, it.duration].filter(Boolean).join(' · ')
+    doc.text(`${i + 1}. ${it.drug}${dose ? `  —  ${dose}` : ''}`, 28, y)
+    y += 6
+    if (it.instructions) {
+      doc.setFont('helvetica', 'normal')
+      doc.setFontSize(10)
+      doc.text(doc.splitTextToSize(it.instructions, 160), 28, y)
+      y += 6 * Math.max(1, doc.splitTextToSize(it.instructions, 160).length)
+      doc.setFontSize(11)
+    }
+    y += 3
+  })
+
+  if (notes) {
+    y += 4
+    doc.setFont('helvetica', 'bold')
+    doc.setFontSize(10)
+    doc.text('Notes:', 14, y)
+    doc.setFont('helvetica', 'normal')
+    y += 6
+    doc.text(doc.splitTextToSize(notes, 180), 14, y)
+    y += 6 * doc.splitTextToSize(notes, 180).length
+  }
+
+  doc.setFontSize(10)
+  doc.text('Signature: ____________________________', 130, 280)
+
+  doc.save(`prescription-${patient.file_number ?? patient.id}-${dateLabel.replace(/\//g, '-')}.pdf`)
+}
 
 export function exportLedgerStatementPdf(patient: Patient, entries: LedgerEntry[]) {
   const doc = new jsPDF()

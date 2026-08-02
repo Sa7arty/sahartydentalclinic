@@ -7,7 +7,7 @@ import RoleGate from '../components/RoleGate'
 import PatientForm from '../components/PatientForm'
 import PatientBadges from '../components/PatientBadges'
 import ToothChart from '../components/ToothChart'
-import { exportLedgerStatementPdf } from '../lib/pdf'
+import { exportLedgerStatementPdf, exportPrescriptionPdf } from '../lib/pdf'
 import { formatDate, formatDateTime, toDatetimeLocal } from '../lib/dates'
 import {
   Patient,
@@ -22,6 +22,8 @@ import {
   PatientMedication,
   PatientAllergy,
   COMMON_ALLERGIES,
+  Prescription,
+  PrescriptionItem,
   Expense,
   patientFullName,
   missingRequiredPatientFields,
@@ -38,7 +40,9 @@ import {
   nowLocalDatetimeValue,
 } from '../types'
 
-type Tab = 'info' | 'visits' | 'medical' | 'notes' | 'teeth' | 'photos' | 'ledger'
+type Tab = 'info' | 'visits' | 'medical' | 'notes' | 'teeth' | 'photos' | 'ledger' | 'prescriptions'
+
+const EMPTY_RX: PrescriptionItem = { drug: '', dosage: '', frequency: '', duration: '', instructions: '' }
 
 const PATIENT_SELECT =
   '*, provider:providers(first_name,last_name), group:patient_groups(name), created_by_profile:profiles!patients_created_by_fkey(full_name,email), updated_by_profile:profiles!patients_updated_by_fkey(full_name,email)'
@@ -61,6 +65,10 @@ export default function PatientDetail() {
   const [conditions, setConditions] = useState<PatientCondition[]>([])
   const [medications, setMedications] = useState<PatientMedication[]>([])
   const [allergies, setAllergies] = useState<PatientAllergy[]>([])
+  const [prescriptions, setPrescriptions] = useState<Prescription[]>([])
+  const [rxItems, setRxItems] = useState<PrescriptionItem[]>([{ ...EMPTY_RX }])
+  const [rxPrescriber, setRxPrescriber] = useState('')
+  const [rxNotes, setRxNotes] = useState('')
   const [conditionOptions, setConditionOptions] = useState<string[]>([])
   const [locations, setLocations] = useState<Location[]>([])
   const [providers, setProviders] = useState<Provider[]>([])
@@ -99,6 +107,7 @@ export default function PatientDetail() {
       { data: grp },
       { data: condOpts },
       { data: alg },
+      { data: rx },
     ] = await Promise.all([
       supabase.from('patients').select(PATIENT_SELECT).eq('id', patientId).single(),
       supabase.from('visits').select('*, provider:providers(first_name,last_name)').eq('patient_id', patientId).order('scheduled_at', { ascending: false }),
@@ -113,6 +122,7 @@ export default function PatientDetail() {
       supabase.from('patient_groups').select('*').order('name'),
       supabase.from('medical_conditions').select('name').eq('active', true).order('name'),
       supabase.from('patient_allergies').select('*').eq('patient_id', patientId).order('created_at'),
+      supabase.from('prescriptions').select('*').eq('patient_id', patientId).order('created_at', { ascending: false }),
     ])
     setPatient(p ?? null)
     setVisits(v ?? [])
@@ -123,11 +133,58 @@ export default function PatientDetail() {
     setConditions(cond ?? [])
     setMedications(meds ?? [])
     setAllergies(alg ?? [])
+    setPrescriptions((rx as Prescription[]) ?? [])
     setLocations(locs ?? [])
     setProviders(prov ?? [])
     setGroups(grp ?? [])
     setConditionOptions((condOpts ?? []).map((c: any) => c.name))
+    // Default the prescriber to the patient's assigned provider (only if not already typed).
+    const prescriber = (prov ?? []).find((pr: any) => pr.id === (p as any)?.provider_id)
+    if (prescriber) setRxPrescriber((cur) => cur || providerFullName(prescriber))
     setLoading(false)
+  }
+
+  function updateRx(i: number, field: keyof PrescriptionItem, val: string) {
+    setRxItems((items) => items.map((it, idx) => (idx === i ? { ...it, [field]: val } : it)))
+  }
+  async function handleSavePrescription() {
+    if (!id) return
+    const clean = rxItems
+      .map((it) => ({
+        drug: it.drug.trim(),
+        dosage: it.dosage.trim(),
+        frequency: it.frequency.trim(),
+        duration: it.duration.trim(),
+        instructions: it.instructions.trim(),
+      }))
+      .filter((it) => it.drug)
+    if (clean.length === 0) {
+      alert('Add at least one medication (the drug name is required).')
+      return
+    }
+    const { error } = await supabase.from('prescriptions').insert({
+      patient_id: id,
+      prescriber_name: rxPrescriber.trim() || null,
+      notes: rxNotes.trim() || null,
+      items: clean,
+    })
+    if (error) {
+      alert(error.message)
+      return
+    }
+    if (patient) exportPrescriptionPdf(patient, rxPrescriber.trim(), clean, rxNotes.trim(), new Date().toLocaleDateString())
+    setRxItems([{ ...EMPTY_RX }])
+    setRxNotes('')
+    load(id)
+  }
+  function reprintPrescription(p: Prescription) {
+    if (patient) exportPrescriptionPdf(patient, p.prescriber_name || '', p.items || [], p.notes || '', new Date(p.created_at).toLocaleDateString())
+  }
+  async function handleDeletePrescription(pid: string) {
+    if (!confirm('Delete this prescription? This cannot be undone.')) return
+    const { error } = await supabase.from('prescriptions').delete().eq('id', pid)
+    if (error) alert(error.message)
+    else if (id) load(id)
   }
 
   async function handleToggleSmoker(isSmoker: boolean) {
@@ -507,7 +564,10 @@ export default function PatientDetail() {
     { key: 'teeth', label: 'Tooth chart' },
     { key: 'photos', label: 'Photos' },
     { key: 'ledger', label: 'Ledger' },
+    { key: 'prescriptions', label: 'Prescriptions' },
   ]
+
+  const hasAlerts = allergies.length > 0 || conditions.length > 0 || patient.is_smoker
 
   return (
     <div className="space-y-6">
@@ -546,6 +606,25 @@ export default function PatientDetail() {
           </div>
         )}
       </div>
+
+      {hasAlerts && (
+        <div className="rounded-xl border border-red-300 bg-red-50 px-4 py-3">
+          <p className="text-sm font-semibold text-red-800">⚠ Medical alerts</p>
+          <div className="mt-1 space-y-0.5 text-sm text-red-700">
+            {allergies.length > 0 && (
+              <p>
+                <span className="font-medium">Allergies:</span> {allergies.map((a) => a.name).join(', ')}
+              </p>
+            )}
+            {conditions.length > 0 && (
+              <p>
+                <span className="font-medium">Conditions:</span> {conditions.map((c) => c.condition).join(', ')}
+              </p>
+            )}
+            {patient.is_smoker && <p className="font-medium">🚬 Smoker</p>}
+          </div>
+        </div>
+      )}
 
       <div className="flex gap-1 overflow-x-auto border-b border-slate-200">
         {tabs.map((t) => (
@@ -1180,6 +1259,80 @@ export default function PatientDetail() {
                 </div>
               ),
             )}
+          </div>
+        </div>
+      )}
+
+      {tab === 'prescriptions' && (
+        <div className="space-y-4">
+          <div className="rounded-xl border border-slate-200 bg-white p-4">
+            <h2 className="mb-3 font-medium text-navy-900">New prescription</h2>
+            <div className="mb-3">
+              <label className="mb-1 block text-xs text-slate-500">Prescriber</label>
+              <input
+                value={rxPrescriber}
+                onChange={(e) => setRxPrescriber(e.target.value)}
+                placeholder="Doctor's name"
+                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm sm:max-w-sm"
+              />
+            </div>
+
+            <div className="space-y-2">
+              {rxItems.map((it, i) => (
+                <div key={i} className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                  <div className="grid gap-2 sm:grid-cols-4">
+                    <input value={it.drug} onChange={(e) => updateRx(i, 'drug', e.target.value)} placeholder="Medication *" className="rounded-lg border border-slate-300 px-3 py-2 text-sm sm:col-span-2" />
+                    <input value={it.dosage} onChange={(e) => updateRx(i, 'dosage', e.target.value)} placeholder="Dosage (e.g. 500 mg)" className="rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+                    <input value={it.frequency} onChange={(e) => updateRx(i, 'frequency', e.target.value)} placeholder="Frequency (e.g. 3×/day)" className="rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+                    <input value={it.duration} onChange={(e) => updateRx(i, 'duration', e.target.value)} placeholder="Duration (e.g. 5 days)" className="rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+                    <input value={it.instructions} onChange={(e) => updateRx(i, 'instructions', e.target.value)} placeholder="Instructions (e.g. after meals)" className="rounded-lg border border-slate-300 px-3 py-2 text-sm sm:col-span-3" />
+                  </div>
+                  {rxItems.length > 1 && (
+                    <button onClick={() => setRxItems((items) => items.filter((_, idx) => idx !== i))} className="mt-2 text-xs text-red-600 hover:underline">
+                      Remove
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+            <button onClick={() => setRxItems((items) => [...items, { ...EMPTY_RX }])} className="mt-2 text-sm font-medium text-navy-700 hover:underline">
+              + Add another medication
+            </button>
+
+            <div className="mt-3">
+              <label className="mb-1 block text-xs text-slate-500">Notes (optional)</label>
+              <textarea value={rxNotes} onChange={(e) => setRxNotes(e.target.value)} className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" rows={2} />
+            </div>
+
+            <button onClick={handleSavePrescription} className="mt-3 rounded-lg bg-gold-500 px-4 py-2 text-sm font-medium text-navy-950 hover:bg-gold-400">
+              Save &amp; print (PDF)
+            </button>
+          </div>
+
+          <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+            <p className="border-b border-slate-100 bg-slate-50 px-4 py-2 text-sm font-medium text-navy-900">Past prescriptions</p>
+            {prescriptions.length === 0 && <p className="p-4 text-sm text-slate-500">No prescriptions yet.</p>}
+            {prescriptions.map((p) => (
+              <div key={p.id} className="flex items-start justify-between gap-3 border-b border-slate-100 px-4 py-3 last:border-0">
+                <div className="min-w-0">
+                  <p className="text-sm font-medium text-navy-900">
+                    {formatDate(p.created_at)}
+                    {p.prescriber_name ? ` · ${p.prescriber_name}` : ''}
+                  </p>
+                  <p className="text-xs text-slate-500">
+                    {(p.items || []).map((it) => [it.drug, it.dosage, it.frequency, it.duration].filter(Boolean).join(' ')).join('  |  ')}
+                  </p>
+                </div>
+                <div className="flex shrink-0 items-center gap-3">
+                  <button onClick={() => reprintPrescription(p)} className="text-xs font-medium text-navy-700 hover:underline">
+                    Print
+                  </button>
+                  <button onClick={() => handleDeletePrescription(p.id)} className="text-xs text-red-600 hover:underline">
+                    Delete
+                  </button>
+                </div>
+              </div>
+            ))}
           </div>
         </div>
       )}
