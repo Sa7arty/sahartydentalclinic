@@ -521,6 +521,8 @@ export interface RecurringExpense {
   id: string
   description: string
   category: string | null
+  item: string | null
+  added_by_name: string | null
   amount: number
   payment_method: PaymentMethod | null
   interval_unit: RecurrenceUnit

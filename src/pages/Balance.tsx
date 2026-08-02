@@ -807,6 +807,8 @@ export default function Balance() {
                       {r.description} · <span className="font-medium">{money(Number(r.amount))}</span>
                     </p>
                     <p className="text-xs text-slate-400">
+                      {[r.category, r.item].filter(Boolean).join(' › ')}
+                      {(r.category || r.item) ? ' · ' : ''}
                       {recurrenceSummary(r)} · next on {formatDate(r.next_run_date)}
                     </p>
                   </div>
