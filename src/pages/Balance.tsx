@@ -453,8 +453,9 @@ export default function Balance() {
       ...expenses.map((r) => ({
         id: `ex-${r.id}`,
         when: r.occurred_at,
-        label: r.description,
-        sublabel: `${EXPENSE_TYPE_LABELS[r.expense_type]}${r.provider ? ` · ${providerFullName(r.provider)}` : ''}${r.payment_method ? ` · ${PAYMENT_METHOD_LABELS[r.payment_method]}` : ''}`,
+        label: `${r.description}${r.recurring_expense_id ? ' 🔁' : ''}`,
+        // Same detail line as the Expenses tab: type · category › item · provider · method · by whom.
+        sublabel: `${EXPENSE_TYPE_LABELS[r.expense_type]}${r.category ? ` · ${r.category}` : ''}${r.item ? ` › ${r.item}` : ''}${r.provider ? ` · ${providerFullName(r.provider)}` : ''}${r.payment_method ? ` · ${PAYMENT_METHOD_LABELS[r.payment_method]}` : ''}${r.added_by_name ? ` · by ${r.added_by_name}` : ''}`,
         // A negative expense is a credit (e.g. a settled staff loan coming back) → treat as money in.
         amount: Math.abs(Number(r.amount)),
         direction: (Number(r.amount) < 0 ? 'in' : 'out') as 'in' | 'out',
