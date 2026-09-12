@@ -2,7 +2,7 @@ import { ChangeEvent, FormEvent, useEffect, useRef, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../context/AuthContext'
 import { useSettings } from '../context/SettingsContext'
-import { Provider, PatientGroup, ProcedureCategory, Procedure, ExpenseCategory, ExpenseItem, providerFullName, REQUIRABLE_PATIENT_FIELDS, DENTAL_SPECIALTIES, ChartScope, CHART_SCOPE_LABELS, DiagnosisCondition, DIAGNOSIS_CONDITION_LABELS } from '../types'
+import { Provider, PatientGroup, ProcedureCategory, Procedure, ExpenseCategory, ExpenseItem, providerFullName, REQUIRABLE_PATIENT_FIELDS, DENTAL_SPECIALTIES, ChartScope, CHART_SCOPE_LABELS, DiagnosisConditionDef } from '../types'
 import { WORLD_COUNTRIES } from '../data/countries'
 import { WEEKDAY_NAMES_FROM } from '../lib/dates'
 import { exportPatientsCsv, downloadPatientImportTemplate, importPatientsFromCsv } from '../lib/csv'
@@ -10,19 +10,22 @@ import { exportPatientsCsv, downloadPatientImportTemplate, importPatientsFromCsv
 const DURATION_OPTIONS = [15, 20, 30, 45, 60, 75, 90, 120]
 const WEEKDAY_FULL_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
 
-type Category = 'patients' | 'calendar' | 'providers' | 'procedures' | 'price-list' | 'financial' | 'team' | 'backup' | 'errors'
+type Category = 'patients' | 'calendar' | 'providers' | 'procedures' | 'diagnosis-conditions' | 'price-list' | 'financial' | 'team' | 'backup' | 'errors'
 
 const CATEGORIES: { key: Category; label: string }[] = [
   { key: 'patients', label: 'Patients' },
   { key: 'calendar', label: 'Calendar & scheduling' },
   { key: 'providers', label: 'Providers' },
   { key: 'procedures', label: 'Procedures' },
+  { key: 'diagnosis-conditions', label: 'Diagnosis conditions' },
   { key: 'price-list', label: 'Price list' },
   { key: 'financial', label: 'Financial' },
   { key: 'team', label: 'Team & access' },
   { key: 'backup', label: 'Backup & import' },
   { key: 'errors', label: 'Error log' },
 ]
+
+const DIAGNOSIS_SCOPE_OPTIONS: ChartScope[] = ['surface', 'multi_surface', 'whole_tooth']
 
 const TEAM_ROLES: { value: string; label: string }[] = [
   { value: 'receptionist', label: 'Receptionist' },
@@ -84,6 +87,10 @@ export default function Settings() {
   const [procedures, setProcedures] = useState<Procedure[]>([])
   const [editingProcedureId, setEditingProcedureId] = useState<string | null>(null)
   const [showAddProcedure, setShowAddProcedure] = useState(false)
+
+  const [diagnosisConditions, setDiagnosisConditions] = useState<DiagnosisConditionDef[]>([])
+  const [editingConditionId, setEditingConditionId] = useState<string | null>(null)
+  const [showAddCondition, setShowAddCondition] = useState(false)
   const [procFilter, setProcFilter] = useState<string>('all')
 
   const [currency, setCurrency] = useState(settings.currency)
@@ -135,6 +142,7 @@ export default function Settings() {
     loadConditions()
     loadProcedureCategories()
     loadProcedures()
+    loadDiagnosisConditions()
     loadExpenseCategories()
     loadTeam()
     loadErrorLogs()
@@ -219,6 +227,10 @@ export default function Settings() {
   async function loadProcedures() {
     const { data } = await supabase.from('procedures').select('*, category:procedure_categories(name)').order('name')
     setProcedures((data as unknown as Procedure[]) ?? [])
+  }
+  async function loadDiagnosisConditions() {
+    const { data } = await supabase.from('diagnosis_conditions').select('*').order('name')
+    setDiagnosisConditions((data as DiagnosisConditionDef[]) ?? [])
   }
 
   // ---- groups ----
@@ -347,6 +359,24 @@ export default function Settings() {
     const { error } = await supabase.from('procedures').update({ default_price: value }).eq('id', id)
     if (error) alert(error.message)
     else loadProcedures()
+  }
+
+  // ---- diagnosis conditions ----
+  async function handleSaveDiagnosisCondition(payload: Record<string, unknown>, id?: string) {
+    const { error } = id ? await supabase.from('diagnosis_conditions').update(payload).eq('id', id) : await supabase.from('diagnosis_conditions').insert(payload)
+    if (error) {
+      alert(error.message)
+      return
+    }
+    setEditingConditionId(null)
+    setShowAddCondition(false)
+    loadDiagnosisConditions()
+  }
+  async function handleDeleteDiagnosisCondition(id: string) {
+    if (!confirm('Delete this diagnosis condition? Past diagnoses that used it keep their name and stay visible, just no longer linked to this entry.')) return
+    const { error } = await supabase.from('diagnosis_conditions').delete().eq('id', id)
+    if (error) alert(error.message)
+    else loadDiagnosisConditions()
   }
 
   // ---- app_settings saves ----
@@ -776,6 +806,7 @@ export default function Settings() {
             {showAddProcedure && (
               <ProcedureFields
                 categories={procCategories}
+                diagnosisConditions={diagnosisConditions}
                 currency={settings.currency}
                 defaultCategoryId={procFilter === 'all' ? null : procFilter}
                 onSave={(payload) => handleSaveProcedure(payload)}
@@ -799,6 +830,7 @@ export default function Settings() {
                           <ProcedureFields
                             procedure={p}
                             categories={procCategories}
+                            diagnosisConditions={diagnosisConditions}
                             currency={settings.currency}
                             onSave={(payload) => handleSaveProcedure(payload, p.id)}
                             onCancel={() => setEditingProcedureId(null)}
@@ -835,6 +867,57 @@ export default function Settings() {
                 </div>
               ))
             })()}
+          </div>
+        </div>
+      )}
+
+      {category === 'diagnosis-conditions' && (
+        <div className={card}>
+          <div className="flex items-center justify-between">
+            <div>
+              <h2 className="font-medium text-navy-900">Diagnosis conditions</h2>
+              <p className="text-sm text-slate-500">The findings staff can record in Diagnosis mode on the tooth chart — add your own, pick a color, and choose whether each usually covers a single surface, several surfaces, or the whole tooth.</p>
+            </div>
+            <button
+              onClick={() => {
+                setShowAddCondition((s) => !s)
+                setEditingConditionId(null)
+              }}
+              className="shrink-0 rounded-lg border border-slate-300 px-3 py-1.5 text-sm text-navy-800 hover:bg-slate-50"
+            >
+              {showAddCondition ? 'Cancel' : '+ Add condition'}
+            </button>
+          </div>
+          {showAddCondition && <ConditionFields onSave={(payload) => handleSaveDiagnosisCondition(payload)} onCancel={() => setShowAddCondition(false)} />}
+          <div className="divide-y divide-slate-100">
+            {diagnosisConditions.length === 0 && !showAddCondition && <p className="py-2 text-sm text-slate-500">No conditions yet — add one above.</p>}
+            {diagnosisConditions.map((c) =>
+              editingConditionId === c.id ? (
+                <div key={c.id} className="py-3">
+                  <ConditionFields condition={c} onSave={(payload) => handleSaveDiagnosisCondition(payload, c.id)} onCancel={() => setEditingConditionId(null)} />
+                </div>
+              ) : (
+                <div key={c.id} className="flex items-center justify-between gap-3 py-3">
+                  <div className="flex items-center gap-2">
+                    <span className="inline-block h-4 w-4 shrink-0 rounded-full border border-slate-300" style={{ backgroundColor: c.color }} />
+                    <div>
+                      <p className="font-medium text-navy-900">
+                        {c.name} {!c.active && <span className="text-xs font-normal text-slate-400">· inactive</span>}
+                      </p>
+                      <p className="text-xs text-slate-500">{CHART_SCOPE_LABELS[c.default_scope]}</p>
+                    </div>
+                  </div>
+                  <div className="flex shrink-0 gap-3">
+                    <button onClick={() => setEditingConditionId(c.id)} className="text-sm font-medium text-navy-700 hover:underline">
+                      Edit
+                    </button>
+                    <button onClick={() => handleDeleteDiagnosisCondition(c.id)} className="text-sm text-red-600 hover:underline">
+                      Delete
+                    </button>
+                  </div>
+                </div>
+              ),
+            )}
           </div>
         </div>
       )}
@@ -1287,6 +1370,7 @@ function ProviderFields({ provider, onSave, onCancel }: { provider?: Provider; o
 function ProcedureFields({
   procedure,
   categories,
+  diagnosisConditions,
   currency,
   defaultCategoryId,
   onSave,
@@ -1294,6 +1378,7 @@ function ProcedureFields({
 }: {
   procedure?: Procedure
   categories: ProcedureCategory[]
+  diagnosisConditions: DiagnosisConditionDef[]
   currency: string
   defaultCategoryId?: string | null
   onSave: (payload: Record<string, unknown>) => void
@@ -1312,7 +1397,7 @@ function ProcedureFields({
       default_duration_minutes: duration ? Number(duration) : null,
       default_price: price ? Number(price) : null,
       default_scope: form.get('default_scope') || 'whole_tooth',
-      results_in_condition: form.get('results_in_condition') || null,
+      results_in_condition_id: form.get('results_in_condition_id') || null,
       active: form.get('active') === 'on',
     })
   }
@@ -1341,11 +1426,11 @@ function ProcedureFields({
         <p className="mt-0.5 text-[11px] text-slate-400">Area this procedure usually affects on the tooth chart — staff can still pick a different area for an unusual case.</p>
       </div>
       <div>
-        <select name="results_in_condition" defaultValue={procedure?.results_in_condition ?? ''} className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm">
+        <select name="results_in_condition_id" defaultValue={procedure?.results_in_condition_id ?? ''} className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm">
           <option value="">— Doesn't auto-update diagnosis —</option>
-          {(Object.keys(DIAGNOSIS_CONDITION_LABELS) as DiagnosisCondition[]).map((c) => (
-            <option key={c} value={c}>
-              {DIAGNOSIS_CONDITION_LABELS[c]}
+          {diagnosisConditions.map((c) => (
+            <option key={c.id} value={c.id}>
+              {c.name}
             </option>
           ))}
         </select>
@@ -1354,6 +1439,59 @@ function ProcedureFields({
       <textarea name="description" defaultValue={procedure?.description ?? ''} placeholder="Description / clinical details" className="rounded-lg border border-slate-300 px-3 py-2 text-sm sm:col-span-2" />
       <label className="flex items-center gap-2 text-sm text-navy-800 sm:col-span-2">
         <input type="checkbox" name="active" defaultChecked={procedure?.active ?? true} />
+        Active
+      </label>
+      <div className="flex gap-2 sm:col-span-2">
+        <button type="submit" className="rounded-lg bg-navy-900 px-4 py-2 text-sm font-medium text-white hover:bg-navy-800">
+          Save
+        </button>
+        <button type="button" onClick={onCancel} className="rounded-lg border border-slate-300 px-4 py-2 text-sm text-navy-800 hover:bg-slate-50">
+          Cancel
+        </button>
+      </div>
+    </form>
+  )
+}
+
+function ConditionFields({
+  condition,
+  onSave,
+  onCancel,
+}: {
+  condition?: DiagnosisConditionDef
+  onSave: (payload: Record<string, unknown>) => void
+  onCancel: () => void
+}) {
+  function handleSubmit(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault()
+    const form = new FormData(e.currentTarget)
+    onSave({
+      name: form.get('name'),
+      color: form.get('color') || '#94a3b8',
+      default_scope: form.get('default_scope') || 'whole_tooth',
+      active: form.get('active') === 'on',
+    })
+  }
+  return (
+    <form onSubmit={handleSubmit} className="grid gap-2 rounded-lg border border-slate-200 p-3 sm:grid-cols-2">
+      <input name="name" required defaultValue={condition?.name ?? ''} placeholder="Condition name (e.g. Decayed)" className="rounded-lg border border-slate-300 px-3 py-2 text-sm sm:col-span-2" />
+      <div>
+        <label className="mb-1 block text-xs text-slate-500">Color</label>
+        <input name="color" type="color" defaultValue={condition?.color ?? '#94a3b8'} className="h-9 w-full rounded-lg border border-slate-300 px-2" />
+      </div>
+      <div>
+        <label className="mb-1 block text-xs text-slate-500">How it affects the tooth</label>
+        <select name="default_scope" defaultValue={condition?.default_scope ?? 'whole_tooth'} className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm">
+          {DIAGNOSIS_SCOPE_OPTIONS.map((s) => (
+            <option key={s} value={s}>
+              {CHART_SCOPE_LABELS[s]}
+            </option>
+          ))}
+        </select>
+        <p className="mt-0.5 text-[11px] text-slate-400">Default only — staff can still pick a specific surface or the whole tooth per case.</p>
+      </div>
+      <label className="flex items-center gap-2 text-sm text-navy-800 sm:col-span-2">
+        <input type="checkbox" name="active" defaultChecked={condition?.active ?? true} />
         Active
       </label>
       <div className="flex gap-2 sm:col-span-2">

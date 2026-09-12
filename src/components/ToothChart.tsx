@@ -11,9 +11,7 @@ import {
   ChartStatus,
   CHART_STATUS_LABELS,
   CHART_STATUS_COLORS,
-  DiagnosisCondition,
-  DIAGNOSIS_CONDITION_LABELS,
-  DIAGNOSIS_CONDITION_COLORS,
+  DiagnosisConditionDef,
   Procedure,
   ProcedureCategory,
   Provider,
@@ -53,6 +51,9 @@ function ToothDiagram({
   scale?: number
 }) {
   const clipId = useId()
+  const gradId = useId()
+  const rootGradId = useId()
+  const shadowId = useId()
   const type = toothType(tooth)
   const crownPath = CROWN_PATHS[type]
   const rootPaths = ROOT_PATHS[type]
@@ -72,27 +73,40 @@ function ToothDiagram({
     [0, 2 * cellH],
     [2 * cellW, 2 * cellH],
   ]
+  // Plain white means "nothing charted here" — show it as soft enamel shading
+  // instead of a flat fill. Any assigned color (diagnosis/status) stays flat
+  // and solid so it reads unambiguously.
+  const enamel = baseColor === '#ffffff'
+  const fillFor = (assigned: string | undefined) => assigned ?? (enamel ? `url(#${gradId})` : baseColor)
 
   return (
-    <svg
-      width={CROWN_W * scale}
-      height={totalH * scale}
-      viewBox={`0 0 ${CROWN_W} ${totalH}`}
-      style={orientation === 'upper' ? { transform: 'scaleY(-1)' } : undefined}
-    >
+    <svg width={CROWN_W * scale} height={totalH * scale} viewBox={`0 0 ${CROWN_W} ${totalH}`} style={orientation === 'upper' ? { transform: 'scaleY(-1)' } : undefined}>
       <defs>
         <clipPath id={clipId}>
           <path d={crownPath} />
         </clipPath>
+        <linearGradient id={gradId} x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stopColor="#fffdf7" />
+          <stop offset="55%" stopColor="#faf3e3" />
+          <stop offset="100%" stopColor="#eee2c4" />
+        </linearGradient>
+        <linearGradient id={rootGradId} x1="0%" y1="0%" x2="0%" y2="100%">
+          <stop offset="0%" stopColor="#f6efdc" />
+          <stop offset="100%" stopColor="#e5d9b8" />
+        </linearGradient>
+        <filter id={shadowId} x="-30%" y="-30%" width="160%" height="160%">
+          <feDropShadow dx="0" dy="0.7" stdDeviation="0.6" floodColor="#7c6a3f" floodOpacity="0.35" />
+        </filter>
       </defs>
-      <path d={crownPath} fill={baseColor} stroke="#94a3b8" strokeWidth={1} />
+      <g filter={`url(#${shadowId})`}>
+        <path d={crownPath} fill={fillFor(undefined)} stroke="#c2b280" strokeWidth={0.6} />
+      </g>
       <g clipPath={`url(#${clipId})`}>
         {corners.map(([x, y], i) => (
-          <rect key={i} x={x} y={y} width={cellW} height={cellH} fill={baseColor} />
+          <rect key={i} x={x} y={y} width={cellW} height={cellH} fill={fillFor(undefined)} />
         ))}
         {regions.map((r) => {
           const selected = selectedSurfaces?.has(r.key)
-          const fill = surfaceColors[r.key] ?? baseColor
           return (
             <rect
               key={r.key}
@@ -100,27 +114,29 @@ function ToothDiagram({
               y={r.y}
               width={cellW}
               height={cellH}
-              fill={fill}
-              stroke={selected ? '#0f172a' : 'rgba(148,163,184,0.5)'}
-              strokeWidth={selected ? 1.5 : 0.4}
+              fill={fillFor(surfaceColors[r.key])}
+              stroke={selected ? '#0f172a' : 'rgba(148,163,184,0.35)'}
+              strokeWidth={selected ? 1.5 : 0.35}
               onClick={selectable ? () => onToggleSurface?.(r.key) : undefined}
               style={selectable ? { cursor: 'pointer' } : undefined}
             />
           )
         })}
+        {/* Soft gloss highlight — purely decorative, never blocks clicks. */}
+        <ellipse cx={CROWN_W * 0.32} cy={CROWN_H * 0.22} rx={CROWN_W * 0.16} ry={CROWN_H * 0.12} fill="#ffffff" opacity={0.35} pointerEvents="none" />
       </g>
       {showRoot &&
-        rootPaths.map((p, i) => <path key={i} d={p} fill="#f3ecd9" stroke="#cbd5e1" strokeWidth={0.75} />)}
+        rootPaths.map((p, i) => <path key={i} d={p} fill={`url(#${rootGradId})`} stroke="#cbb994" strokeWidth={0.6} />)}
     </svg>
   )
 }
 
 type DiagColorMap = Record<number, Partial<Record<ToothSurface, string>>>
 
-function buildDiagnosisColors(diags: ToothDiagnosis[]): DiagColorMap {
+function buildDiagnosisColors(diags: ToothDiagnosis[], colorById: Map<string, string>): DiagColorMap {
   const map: DiagColorMap = {}
   for (const d of diags.filter((x) => x.active)) {
-    const color = DIAGNOSIS_CONDITION_COLORS[d.condition]
+    const color = (d.condition_id && colorById.get(d.condition_id)) || '#94a3b8'
     const surfaces = d.surfaces.length > 0 ? d.surfaces : ALL_SURFACES
     const cur = map[d.tooth] ?? {}
     for (const s of surfaces) cur[s] = color
@@ -148,6 +164,7 @@ function buildStatusColors(entries: ToothProcedure[]): StatusColorMap {
 export default function ToothChart({ patientId }: { patientId: string }) {
   const [mode, setMode] = useState<Mode>('diagnosis')
   const [diagnoses, setDiagnoses] = useState<ToothDiagnosis[]>([])
+  const [conditions, setConditions] = useState<DiagnosisConditionDef[]>([])
   const [entries, setEntries] = useState<ToothProcedure[]>([])
   const [procedures, setProcedures] = useState<Procedure[]>([])
   const [categories, setCategories] = useState<ProcedureCategory[]>([])
@@ -160,7 +177,7 @@ export default function ToothChart({ patientId }: { patientId: string }) {
   const [diagTooth, setDiagTooth] = useState<number | null>(null)
   const [diagWholeTooth, setDiagWholeTooth] = useState(false)
   const [diagSurfaces, setDiagSurfaces] = useState<Set<ToothSurface>>(new Set())
-  const [diagCondition, setDiagCondition] = useState<DiagnosisCondition>('decayed')
+  const [diagConditionId, setDiagConditionId] = useState('')
   const [diagNote, setDiagNote] = useState('')
   const [diagSaving, setDiagSaving] = useState(false)
 
@@ -187,14 +204,16 @@ export default function ToothChart({ patientId }: { patientId: string }) {
 
   async function load() {
     setLoading(true)
-    const [{ data: diags }, { data: tp }, { data: procs }, { data: cats }, { data: provs }] = await Promise.all([
+    const [{ data: diags }, { data: conds }, { data: tp }, { data: procs }, { data: cats }, { data: provs }] = await Promise.all([
       supabase.from('tooth_diagnoses').select('*').eq('patient_id', patientId).order('diagnosed_at', { ascending: true }),
+      supabase.from('diagnosis_conditions').select('*').eq('active', true).order('name'),
       supabase.from('tooth_procedures').select('*').eq('patient_id', patientId).order('created_at', { ascending: true }),
       supabase.from('procedures').select('*, category:procedure_categories(name)').eq('active', true).order('name'),
       supabase.from('procedure_categories').select('*').eq('active', true).order('name'),
       supabase.from('providers').select('*').eq('active', true).order('first_name'),
     ])
     setDiagnoses((diags as ToothDiagnosis[]) ?? [])
+    setConditions((conds as DiagnosisConditionDef[]) ?? [])
     setEntries((tp as ToothProcedure[]) ?? [])
     setProcedures((procs as Procedure[]) ?? [])
     setCategories((cats as ProcedureCategory[]) ?? [])
@@ -202,23 +221,36 @@ export default function ToothChart({ patientId }: { patientId: string }) {
     setLoading(false)
   }
 
-  const diagnosisColors = useMemo(() => buildDiagnosisColors(diagnoses), [diagnoses])
+  const conditionById = useMemo(() => new Map(conditions.map((c) => [c.id, c])), [conditions])
+  const conditionColorById = useMemo(() => new Map(conditions.map((c) => [c.id, c.color])), [conditions])
+  const diagnosisColors = useMemo(() => buildDiagnosisColors(diagnoses, conditionColorById), [diagnoses, conditionColorById])
   const statusColors = useMemo(() => buildStatusColors(entries), [entries])
   const surfaceColorsFor = (n: number) => (mode === 'diagnosis' ? diagnosisColors[n] ?? {} : statusColors[n] ?? {})
 
   // ---------------- Diagnosis mode ----------------
   // "Armed" condition = fast bulk mode: press a condition below the chart, then
   // click through teeth to toggle that whole-tooth finding on/off, no dialog.
-  const [armedCondition, setArmedCondition] = useState<DiagnosisCondition | null>(null)
+  const [armedConditionId, setArmedConditionId] = useState<string | null>(null)
 
-  function toggleArmed(c: DiagnosisCondition) {
+  function toggleArmed(id: string) {
     setDiagOpen(false)
-    setArmedCondition((cur) => (cur === c ? null : c))
+    setArmedConditionId((cur) => (cur === id ? null : id))
+  }
+
+  /** A tooth can only carry ONE active finding per condition — deactivates any other
+   * active match on this tooth+condition before writing, whatever surfaces it covers. */
+  async function resolveOtherActiveMatches(tooth: number, conditionId: string, excludeId?: string) {
+    const matches = diagnoses.filter((d) => d.tooth === tooth && d.active && d.condition_id === conditionId && d.id !== excludeId)
+    if (matches.length === 0) return
+    await supabase.from('tooth_diagnoses').update({ active: false }).in('id', matches.map((d) => d.id))
+    setDiagnoses((cur) => cur.map((d) => (matches.some((m) => m.id === d.id) ? { ...d, active: false } : d)))
   }
 
   async function handleArmedToothClick(tooth: number) {
-    if (!armedCondition) return
-    const existing = diagnoses.find((d) => d.tooth === tooth && d.active && d.surfaces.length === 0 && d.condition === armedCondition)
+    if (!armedConditionId) return
+    const cond = conditionById.get(armedConditionId)
+    if (!cond) return
+    const existing = diagnoses.find((d) => d.tooth === tooth && d.active && d.condition_id === armedConditionId)
     if (existing) {
       const { error } = await supabase.from('tooth_diagnoses').update({ active: false, updated_at: new Date().toISOString() }).eq('id', existing.id)
       if (error) return alert(error.message)
@@ -226,7 +258,7 @@ export default function ToothChart({ patientId }: { patientId: string }) {
     } else {
       const { data, error } = await supabase
         .from('tooth_diagnoses')
-        .insert({ patient_id: patientId, tooth, surfaces: [], condition: armedCondition, note: null, source: 'manual' })
+        .insert({ patient_id: patientId, tooth, surfaces: [], condition_id: armedConditionId, condition_name: cond.name, note: null, source: 'manual' })
         .select()
         .single()
       if (error) return alert(error.message)
@@ -237,18 +269,32 @@ export default function ToothChart({ patientId }: { patientId: string }) {
   function openDiagnosisPanel(tooth: number, surface?: ToothSurface) {
     setDiagEditingId(null)
     setDiagTooth(tooth)
-    setDiagWholeTooth(!surface)
-    setDiagSurfaces(surface ? new Set([surface]) : new Set())
-    setDiagCondition('decayed')
+    const first = conditions[0]
+    setDiagConditionId(first?.id ?? '')
+    if (surface) {
+      setDiagWholeTooth(false)
+      setDiagSurfaces(new Set([surface]))
+    } else if (first) {
+      setDiagWholeTooth(first.default_scope !== 'surface' && first.default_scope !== 'multi_surface')
+      setDiagSurfaces(new Set())
+    } else {
+      setDiagWholeTooth(true)
+      setDiagSurfaces(new Set())
+    }
     setDiagNote('')
     setDiagOpen(true)
+  }
+  function pickDiagCondition(id: string) {
+    setDiagConditionId(id)
+    const c = conditionById.get(id)
+    if (c && diagSurfaces.size === 0) setDiagWholeTooth(c.default_scope !== 'surface' && c.default_scope !== 'multi_surface')
   }
   function openEditDiagnosis(d: ToothDiagnosis) {
     setDiagEditingId(d.id)
     setDiagTooth(d.tooth)
     setDiagWholeTooth(d.surfaces.length === 0)
     setDiagSurfaces(new Set(d.surfaces))
-    setDiagCondition(d.condition)
+    setDiagConditionId(d.condition_id ?? '')
     setDiagNote(d.note ?? '')
     setDiagOpen(true)
   }
@@ -262,13 +308,17 @@ export default function ToothChart({ patientId }: { patientId: string }) {
   }
   async function handleSaveDiagnosis() {
     if (diagTooth === null) return
+    if (!diagConditionId) return alert('Please choose a condition.')
     if (!diagWholeTooth && diagSurfaces.size === 0) return alert('Pick at least one surface, or check "whole tooth".')
+    const cond = conditionById.get(diagConditionId)
     setDiagSaving(true)
+    await resolveOtherActiveMatches(diagTooth, diagConditionId, diagEditingId ?? undefined)
     const payload = {
       patient_id: patientId,
       tooth: diagTooth,
       surfaces: diagWholeTooth ? [] : Array.from(diagSurfaces),
-      condition: diagCondition,
+      condition_id: diagConditionId,
+      condition_name: cond?.name ?? diagnoses.find((d) => d.id === diagEditingId)?.condition_name ?? 'Other',
       note: diagNote || null,
       source: 'manual' as const,
       updated_at: new Date().toISOString(),
@@ -352,7 +402,9 @@ export default function ToothChart({ patientId }: { patientId: string }) {
   /** After a treatment is marked completed, reflect it in Diagnosis mode (if the procedure has a configured "results in" condition). Idempotent — skips if already linked from this entry. */
   async function autoLinkDiagnosis(entryId: string, teeth: number[], surfaces: ToothSurface[], scope: ChartScope, procId: string | null) {
     const proc = procedures.find((p) => p.id === procId)
-    if (!proc?.results_in_condition) return
+    if (!proc?.results_in_condition_id) return
+    const cond = conditionById.get(proc.results_in_condition_id)
+    if (!cond) return
     const { data: already } = await supabase.from('tooth_diagnoses').select('id').eq('source_tooth_procedure_id', entryId).eq('active', true).limit(1)
     if (already && already.length > 0) return
 
@@ -366,7 +418,8 @@ export default function ToothChart({ patientId }: { patientId: string }) {
         patient_id: patientId,
         tooth,
         surfaces: wholeTooth ? [] : surfaces,
-        condition: proc.results_in_condition,
+        condition_id: cond.id,
+        condition_name: cond.name,
         note: `Auto-set after completing "${proc.name}"`,
         source: 'auto',
         source_tooth_procedure_id: entryId,
@@ -450,7 +503,7 @@ export default function ToothChart({ patientId }: { patientId: string }) {
 
   function handleToothClick(n: number, surface?: ToothSurface) {
     if (mode === 'diagnosis') {
-      if (armedCondition) handleArmedToothClick(n)
+      if (armedConditionId) handleArmedToothClick(n)
       else openDiagnosisPanel(n, surface)
     } else openTreatmentPanel(n, surface)
   }
@@ -473,7 +526,7 @@ export default function ToothChart({ patientId }: { patientId: string }) {
         </button>
         <button
           onClick={() => {
-            setArmedCondition(null)
+            setArmedConditionId(null)
             setMode('treatment')
           }}
           className={`rounded-md px-4 py-1.5 font-medium ${mode === 'treatment' ? 'bg-navy-900 text-white' : 'text-navy-700 hover:bg-slate-100'}`}
@@ -486,8 +539,8 @@ export default function ToothChart({ patientId }: { patientId: string }) {
         <p className="mb-3 text-xs text-slate-500">
           Upper arch
           {mode === 'diagnosis'
-            ? armedCondition
-              ? ` — click any tooth to mark it "${DIAGNOSIS_CONDITION_LABELS[armedCondition]}".`
+            ? armedConditionId
+              ? ` — click any tooth to mark it "${conditionById.get(armedConditionId)?.name ?? ''}".`
               : ' — click a surface to record a finding, or the number for the whole tooth.'
             : ' — click a surface to chart a procedure, or the number for the whole tooth.'}
         </p>
@@ -518,23 +571,24 @@ export default function ToothChart({ patientId }: { patientId: string }) {
       {mode === 'diagnosis' ? (
         <div className="space-y-1.5">
           <div className="flex flex-wrap gap-1.5 text-xs">
-            {(Object.keys(DIAGNOSIS_CONDITION_LABELS) as DiagnosisCondition[]).map((c) => (
+            {conditions.length === 0 && <p className="text-slate-400">No diagnosis conditions configured yet — add some in Settings.</p>}
+            {conditions.map((c) => (
               <button
-                key={c}
-                onClick={() => toggleArmed(c)}
+                key={c.id}
+                onClick={() => toggleArmed(c.id)}
                 className={`flex items-center gap-1.5 rounded-full border px-2.5 py-1 font-medium transition ${
-                  armedCondition === c ? 'border-navy-900 bg-navy-900 text-white' : 'border-slate-300 text-slate-600 hover:bg-slate-50'
+                  armedConditionId === c.id ? 'border-navy-900 bg-navy-900 text-white' : 'border-slate-300 text-slate-600 hover:bg-slate-50'
                 }`}
               >
-                <span className="inline-block h-3 w-3 rounded-full border border-slate-300" style={{ backgroundColor: DIAGNOSIS_CONDITION_COLORS[c] }} />
-                {DIAGNOSIS_CONDITION_LABELS[c]}
+                <span className="inline-block h-3 w-3 rounded-full border border-slate-300" style={{ backgroundColor: c.color }} />
+                {c.name}
               </button>
             ))}
           </div>
           <p className="text-xs text-slate-500">
-            {armedCondition ? (
+            {armedConditionId ? (
               <>
-                <span className="font-medium text-navy-800">{DIAGNOSIS_CONDITION_LABELS[armedCondition]}</span> is armed — click every tooth that has it (click again to remove). Press the pill again when
+                <span className="font-medium text-navy-800">{conditionById.get(armedConditionId)?.name}</span> is armed — click every tooth that has it (click again to remove). Press the pill again when
                 done.
               </>
             ) : (
@@ -575,10 +629,11 @@ export default function ToothChart({ patientId }: { patientId: string }) {
               ))}
             </div>
           )}
-          <select value={diagCondition} onChange={(e) => setDiagCondition(e.target.value as DiagnosisCondition)} className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm">
-            {(Object.keys(DIAGNOSIS_CONDITION_LABELS) as DiagnosisCondition[]).map((c) => (
-              <option key={c} value={c}>
-                {DIAGNOSIS_CONDITION_LABELS[c]}
+          <select value={diagConditionId} onChange={(e) => pickDiagCondition(e.target.value)} className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm">
+            <option value="">— Select a condition —</option>
+            {conditions.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.name}
               </option>
             ))}
           </select>
@@ -601,8 +656,8 @@ export default function ToothChart({ patientId }: { patientId: string }) {
                 {diagsForTooth(diagTooth).map((d) => (
                   <div key={d.id} className={`flex items-center justify-between gap-2 text-xs ${!d.active ? 'text-slate-400 line-through' : ''}`}>
                     <span className="flex items-center gap-1.5">
-                      <span className="inline-block h-2.5 w-2.5 rounded-full border border-slate-300" style={{ backgroundColor: DIAGNOSIS_CONDITION_COLORS[d.condition] }} />
-                      {DIAGNOSIS_CONDITION_LABELS[d.condition]} — {d.surfaces.length ? d.surfaces.join(', ') : 'whole tooth'}
+                      <span className="inline-block h-2.5 w-2.5 rounded-full border border-slate-300" style={{ backgroundColor: (d.condition_id && conditionColorById.get(d.condition_id)) || '#94a3b8' }} />
+                      {d.condition_name} — {d.surfaces.length ? d.surfaces.join(', ') : 'whole tooth'}
                       {d.source === 'auto' && <span className="text-slate-400"> (auto)</span>}
                     </span>
                     {d.active && (
@@ -817,8 +872,8 @@ export default function ToothChart({ patientId }: { patientId: string }) {
                 <div key={d.id} className={`flex items-center justify-between gap-3 border-b border-slate-100 px-4 py-3 last:border-0 ${!d.active ? 'opacity-50' : ''}`}>
                   <div className="min-w-0">
                     <p className="flex items-center gap-1.5 text-sm font-medium text-navy-900">
-                      <span className="inline-block h-2.5 w-2.5 shrink-0 rounded-full border border-slate-300" style={{ backgroundColor: DIAGNOSIS_CONDITION_COLORS[d.condition] }} />
-                      Tooth {d.tooth} — {DIAGNOSIS_CONDITION_LABELS[d.condition]}
+                      <span className="inline-block h-2.5 w-2.5 shrink-0 rounded-full border border-slate-300" style={{ backgroundColor: (d.condition_id && conditionColorById.get(d.condition_id)) || '#94a3b8' }} />
+                      Tooth {d.tooth} — {d.condition_name}
                       {!d.active && <span className="text-xs font-normal text-slate-400">(resolved)</span>}
                       {d.source === 'auto' && <span className="text-xs font-normal text-slate-400">· auto</span>}
                     </p>
