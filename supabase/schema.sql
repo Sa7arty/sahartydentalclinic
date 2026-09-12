@@ -964,9 +964,14 @@ using (has_role(auth.uid(), 'dentist'::app_role));
 
 -- Tooth chart rebuild (2026-09-12): surface-level procedure charting with a
 -- configurable scope (surface/multi-surface/whole tooth/sextant/arch/whole
--- mouth) and a planned/in-progress/completed status. The old tooth_records
--- table (whole-tooth baseline condition — Healthy/Missing/etc.) is untouched
--- and still used alongside this.
+-- mouth) and a planned/in-progress/completed status.
+--
+-- UPDATE same day: this became "Treatment plan" mode, paired with a new
+-- "Diagnosis" mode (tooth_diagnoses below) that records the CURRENT state of
+-- a tooth/surface — separate from the planned/in-progress/completed workflow.
+-- The old tooth_records table (whole-tooth baseline condition) is retired
+-- from the UI in favor of Diagnosis mode; the table itself is untouched
+-- (it was empty, so no migration was needed) but nothing writes to it anymore.
 create type public.chart_scope as enum ('surface', 'multi_surface', 'whole_tooth', 'sextant', 'arch', 'whole_mouth');
 create type public.chart_status as enum ('planned', 'in_progress', 'completed');
 
@@ -1000,4 +1005,42 @@ using (
 with check (
   has_role(auth.uid(), 'dentist'::app_role)
   or exists (select 1 from public.patients p where p.id = tooth_procedures.patient_id and has_location_access(auth.uid(), p.primary_location_id))
+);
+
+-- Diagnosis mode: current/existing state per tooth (or specific surfaces),
+-- independent of the treatment workflow above. "active = false" means a later
+-- finding (manual or auto, e.g. a completed filling) superseded this one —
+-- kept for history rather than deleted.
+create type public.diagnosis_condition as enum (
+  'healthy', 'decayed', 'filled', 'crowned', 'root_canal_treated', 'missing',
+  'implant', 'bridge', 'veneer', 'denture_abutment', 'fractured', 'other'
+);
+
+alter table public.procedures add column if not exists results_in_condition public.diagnosis_condition;
+
+create table if not exists public.tooth_diagnoses (
+  id uuid primary key default gen_random_uuid(),
+  patient_id uuid not null references public.patients(id) on delete cascade,
+  tooth int not null,
+  surfaces text[] not null default '{}',
+  condition public.diagnosis_condition not null,
+  note text,
+  source text not null default 'manual',
+  source_tooth_procedure_id uuid references public.tooth_procedures(id) on delete set null,
+  active boolean not null default true,
+  diagnosed_by uuid default auth.uid(),
+  diagnosed_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create index if not exists tooth_diagnoses_patient_idx on public.tooth_diagnoses(patient_id);
+alter table public.tooth_diagnoses enable row level security;
+create policy "staff manage tooth diagnoses for accessible patients"
+on public.tooth_diagnoses for all
+using (
+  has_role(auth.uid(), 'dentist'::app_role)
+  or exists (select 1 from public.patients p where p.id = tooth_diagnoses.patient_id and has_location_access(auth.uid(), p.primary_location_id))
+)
+with check (
+  has_role(auth.uid(), 'dentist'::app_role)
+  or exists (select 1 from public.patients p where p.id = tooth_diagnoses.patient_id and has_location_access(auth.uid(), p.primary_location_id))
 );
