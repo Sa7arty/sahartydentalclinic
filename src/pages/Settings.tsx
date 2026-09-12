@@ -2,7 +2,7 @@ import { ChangeEvent, FormEvent, useEffect, useRef, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../context/AuthContext'
 import { useSettings } from '../context/SettingsContext'
-import { Provider, PatientGroup, ProcedureCategory, Procedure, ExpenseCategory, ExpenseItem, providerFullName, REQUIRABLE_PATIENT_FIELDS, DENTAL_SPECIALTIES, ChartScope, CHART_SCOPE_LABELS } from '../types'
+import { Provider, PatientGroup, ProcedureCategory, Procedure, ExpenseCategory, ExpenseItem, providerFullName, REQUIRABLE_PATIENT_FIELDS, DENTAL_SPECIALTIES, ChartScope, CHART_SCOPE_LABELS, DiagnosisCondition, DIAGNOSIS_CONDITION_LABELS } from '../types'
 import { WORLD_COUNTRIES } from '../data/countries'
 import { WEEKDAY_NAMES_FROM } from '../lib/dates'
 import { exportPatientsCsv, downloadPatientImportTemplate, importPatientsFromCsv } from '../lib/csv'
@@ -1312,6 +1312,7 @@ function ProcedureFields({
       default_duration_minutes: duration ? Number(duration) : null,
       default_price: price ? Number(price) : null,
       default_scope: form.get('default_scope') || 'whole_tooth',
+      results_in_condition: form.get('results_in_condition') || null,
       active: form.get('active') === 'on',
     })
   }
@@ -1338,6 +1339,17 @@ function ProcedureFields({
           ))}
         </select>
         <p className="mt-0.5 text-[11px] text-slate-400">Area this procedure usually affects on the tooth chart — staff can still pick a different area for an unusual case.</p>
+      </div>
+      <div>
+        <select name="results_in_condition" defaultValue={procedure?.results_in_condition ?? ''} className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm">
+          <option value="">— Doesn't auto-update diagnosis —</option>
+          {(Object.keys(DIAGNOSIS_CONDITION_LABELS) as DiagnosisCondition[]).map((c) => (
+            <option key={c} value={c}>
+              {DIAGNOSIS_CONDITION_LABELS[c]}
+            </option>
+          ))}
+        </select>
+        <p className="mt-0.5 text-[11px] text-slate-400">When completed, automatically set the diagnosis chart to this (e.g. Filling → Filled). Leave blank if this procedure shouldn't change it.</p>
       </div>
       <textarea name="description" defaultValue={procedure?.description ?? ''} placeholder="Description / clinical details" className="rounded-lg border border-slate-300 px-3 py-2 text-sm sm:col-span-2" />
       <label className="flex items-center gap-2 text-sm text-navy-800 sm:col-span-2">

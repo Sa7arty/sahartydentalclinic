@@ -45,6 +45,43 @@ export function expandScopeToTeeth(scope: ChartScope, selection: { teeth?: numbe
   }
 }
 
+// ---------------------------------------------------------------------------
+// Anatomical tooth icon shapes. FDI's last digit tells the tooth type the same
+// way in every quadrant (1-2 = incisor, 3 = canine, 4-5 = premolar, 6-8 = molar),
+// so one shape set covers all 32 positions. Each path is drawn canonically as a
+// LOWER tooth (root pointing down, incisal/occlusal edge up) — the chart flips
+// upper-row teeth vertically to reuse the same paths, same trick as before.
+// ---------------------------------------------------------------------------
+export type ToothType = 'incisor' | 'canine' | 'premolar' | 'molar'
+
+export function toothType(n: number): ToothType {
+  const last = n % 10
+  if (last === 1 || last === 2) return 'incisor'
+  if (last === 3) return 'canine'
+  if (last === 4 || last === 5) return 'premolar'
+  return 'molar'
+}
+
+export const CROWN_W = 40
+export const CROWN_H = 34
+export const ROOT_H = 24
+
+export const CROWN_PATHS: Record<ToothType, string> = {
+  incisor: 'M13,2 L27,2 Q30,2 30,6 L29,28 Q28,34 24,34 L16,34 Q12,34 11,28 L10,6 Q10,2 13,2 Z',
+  canine: 'M20,1 L29,9 Q31,12 30,18 L29,28 Q28,34 23,34 L17,34 Q12,34 11,28 L10,18 Q9,12 11,9 Z',
+  premolar: 'M11,10 Q11,3 17,3 Q19,5 20,5 Q21,5 23,3 Q29,3 29,10 L29,28 Q28,34 23,34 L17,34 Q12,34 11,28 Z',
+  molar: 'M8,10 Q8,3 14,3 Q17,6 19,4 Q21,3 23,4 Q25,6 26,3 Q32,3 32,10 L32,28 Q31,34 25,34 L15,34 Q9,34 8,28 Z',
+}
+
+// Roots are purely decorative (not clickable) — one tapered root for most teeth,
+// two for molars, drawn below the crown in the same 0–40 wide box.
+export const ROOT_PATHS: Record<ToothType, string[]> = {
+  incisor: ['M16,34 L24,34 L21,56 Q20,60 19,56 Z'],
+  canine: ['M15,34 L25,34 L21,58 Q20,61 19,58 Z'],
+  premolar: ['M14,34 L26,34 L21,56 Q20,60 19,56 Z'],
+  molar: ['M9,34 L18,34 L16,54 Q14,58 13,54 Z', 'M22,34 L31,34 L29,54 Q27,58 26,54 Z'],
+}
+
 /** Human-readable description of what a chart entry covers, for lists/tooltips. */
 export function describeScope(scope: ChartScope, teeth: number[], surfaces: ToothSurface[]): string {
   switch (scope) {

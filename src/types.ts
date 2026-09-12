@@ -126,6 +126,7 @@ export interface Procedure {
   default_duration_minutes: number | null
   default_price: number | null
   default_scope: ChartScope
+  results_in_condition: DiagnosisCondition | null
   active: boolean
 }
 
@@ -539,6 +540,55 @@ export const CHART_STATUS_COLORS: Record<ChartStatus, string> = {
   planned: '#3b82f6',
   in_progress: '#f59e0b',
   completed: '#22c55e',
+}
+
+// Diagnosis mode: the current/existing state of a tooth (or one of its surfaces),
+// independent of the planned/in-progress/completed workflow used for treatment.
+export type DiagnosisCondition = 'healthy' | 'decayed' | 'filled' | 'crowned' | 'root_canal_treated' | 'missing' | 'implant' | 'bridge' | 'veneer' | 'denture_abutment' | 'fractured' | 'other'
+
+export const DIAGNOSIS_CONDITION_LABELS: Record<DiagnosisCondition, string> = {
+  healthy: 'Healthy',
+  decayed: 'Decayed',
+  filled: 'Filled (existing)',
+  crowned: 'Crowned',
+  root_canal_treated: 'Root canal treated',
+  missing: 'Missing',
+  implant: 'Implant',
+  bridge: 'Bridge',
+  veneer: 'Veneer',
+  denture_abutment: 'Denture abutment',
+  fractured: 'Fractured',
+  other: 'Other',
+}
+
+export const DIAGNOSIS_CONDITION_COLORS: Record<DiagnosisCondition, string> = {
+  healthy: '#ffffff',
+  decayed: '#f59e0b',
+  filled: '#93c5fd',
+  crowned: '#fbbf24',
+  root_canal_treated: '#f87171',
+  missing: '#e5e7eb',
+  implant: '#a78bfa',
+  bridge: '#c084fc',
+  veneer: '#f0abfc',
+  denture_abutment: '#fda4af',
+  fractured: '#ef4444',
+  other: '#94a3b8',
+}
+
+export interface ToothDiagnosis {
+  id: string
+  patient_id: string
+  tooth: number
+  surfaces: ToothSurface[]
+  condition: DiagnosisCondition
+  note: string | null
+  source: 'manual' | 'auto'
+  source_tooth_procedure_id: string | null
+  active: boolean
+  diagnosed_by: string | null
+  diagnosed_at: string
+  updated_at: string
 }
 
 export interface ToothProcedure {
