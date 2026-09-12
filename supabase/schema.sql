@@ -1011,19 +1011,35 @@ with check (
 -- independent of the treatment workflow above. "active = false" means a later
 -- finding (manual or auto, e.g. a completed filling) superseded this one —
 -- kept for history rather than deleted.
-create type public.diagnosis_condition as enum (
-  'healthy', 'decayed', 'filled', 'crowned', 'root_canal_treated', 'missing',
-  'implant', 'bridge', 'veneer', 'denture_abutment', 'fractured', 'other'
+--
+-- UPDATE same day: the original fixed diagnosis_condition enum was replaced
+-- with a proper settings-managed table (name/color/default_scope, editable
+-- in Settings > Diagnosis conditions) so the owner can add, remove, recolor,
+-- and rescope conditions without a code change. The 23 rows that existed
+-- under the old enum were migrated by name; the enum was then dropped.
+create table public.diagnosis_conditions (
+  id uuid primary key default gen_random_uuid(),
+  name text not null,
+  color text not null default '#94a3b8',
+  default_scope public.chart_scope not null default 'whole_tooth',
+  active boolean not null default true,
+  created_at timestamptz not null default now()
 );
+alter table public.diagnosis_conditions enable row level security;
+create policy "dentist manages diagnosis conditions" on public.diagnosis_conditions for all
+using (has_role(auth.uid(), 'dentist'::app_role)) with check (has_role(auth.uid(), 'dentist'::app_role));
+create policy "staff can view diagnosis conditions" on public.diagnosis_conditions for select
+using (auth.role() = 'authenticated'::text);
 
-alter table public.procedures add column if not exists results_in_condition public.diagnosis_condition;
+alter table public.procedures add column if not exists results_in_condition_id uuid references public.diagnosis_conditions(id) on delete set null;
 
 create table if not exists public.tooth_diagnoses (
   id uuid primary key default gen_random_uuid(),
   patient_id uuid not null references public.patients(id) on delete cascade,
   tooth int not null,
   surfaces text[] not null default '{}',
-  condition public.diagnosis_condition not null,
+  condition_id uuid references public.diagnosis_conditions(id) on delete set null,
+  condition_name text not null, -- snapshot so history reads fine even if the condition is renamed/deleted later
   note text,
   source text not null default 'manual',
   source_tooth_procedure_id uuid references public.tooth_procedures(id) on delete set null,
@@ -1044,3 +1060,5 @@ with check (
   has_role(auth.uid(), 'dentist'::app_role)
   or exists (select 1 from public.patients p where p.id = tooth_diagnoses.patient_id and has_location_access(auth.uid(), p.primary_location_id))
 );
+-- A tooth should carry at most one ACTIVE finding per condition (app-enforced:
+-- writes resolve any other active match on the same tooth+condition first).
