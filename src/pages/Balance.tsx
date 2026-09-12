@@ -27,7 +27,7 @@ import {
   ExpenseItem,
 } from '../types'
 import { toYmd, fromYmd, startOfWeek, formatDate, formatDateTime, toDatetimeLocal } from '../lib/dates'
-import { exportOutstandingBalancesPdf } from '../lib/pdf'
+import { exportOutstandingBalancesPdf, exportPaymentReceiptPdf } from '../lib/pdf'
 
 type SideTab = 'cashflow' | 'income' | 'expenses' | 'outstanding'
 type Period =
@@ -108,7 +108,7 @@ function periodRange(period: Period, weekStartDay: number, customFrom: string, c
   }
 }
 
-type IncomeRow = LedgerEntry & { patients: Pick<Patient, 'id' | 'first_name' | 'middle_name' | 'last_name'> | null }
+type IncomeRow = LedgerEntry & { patients: Pick<Patient, 'id' | 'first_name' | 'middle_name' | 'last_name' | 'file_number'> | null }
 type ExpenseRow = Expense & { provider?: Pick<Provider, 'first_name' | 'last_name'> | null }
 
 type CashItem = {
@@ -259,7 +259,7 @@ export default function Balance() {
     const buildIncome = () => {
       let q = supabase
         .from('ledger_entries')
-        .select('*, patients(id, first_name, middle_name, last_name)')
+        .select('*, patients(id, first_name, middle_name, last_name, file_number)')
         .eq('entry_type', 'payment')
         .order('occurred_at', { ascending: false })
         .order('id', { ascending: true })
@@ -663,19 +663,23 @@ export default function Balance() {
             {incomeItems.length === 0 && <p className="p-4 text-sm text-slate-500">No income in this period.</p>}
             {pagedIncome.items.map((it) =>
               it.kind === 'payment' ? (
-                <Link
-                  key={`pay-${it.row.id}`}
-                  to={it.row.patients ? `/patients/${it.row.patients.id}` : '#'}
-                  className="flex items-center justify-between border-b border-slate-100 px-4 py-3 last:border-0 hover:bg-slate-50"
-                >
-                  <div>
+                <div key={`pay-${it.row.id}`} className="flex items-center justify-between gap-3 border-b border-slate-100 px-4 py-3 last:border-0 hover:bg-slate-50">
+                  <Link to={it.row.patients ? `/patients/${it.row.patients.id}` : '#'} className="min-w-0 flex-1">
                     <p className="font-medium text-navy-900">{it.row.patients ? patientFullName(it.row.patients) : 'Unknown patient'}</p>
                     <p className="text-xs text-slate-400">
                       {formatDateTime(it.row.occurred_at)} · {PAYMENT_METHOD_LABELS[(it.row.payment_method ?? 'other') as PaymentMethod]}
                     </p>
+                  </Link>
+                  <div className="flex shrink-0 items-center gap-3">
+                    <button
+                      onClick={() => exportPaymentReceiptPdf(it.row.patients ?? { first_name: 'Unknown', middle_name: null, last_name: 'patient', file_number: null }, it.row, settings.currency)}
+                      className="text-xs font-medium text-navy-700 hover:underline"
+                    >
+                      Receipt
+                    </button>
+                    <p className="w-24 text-right font-medium text-green-600">+{money(Number(it.row.amount))}</p>
                   </div>
-                  <p className="font-medium text-green-600">+{money(Number(it.row.amount))}</p>
-                </Link>
+                </div>
               ) : editingMiscId === it.row.id ? (
                 <form key={`misc-${it.row.id}`} onSubmit={(ev) => handleSaveMiscEdit(ev, it.row)} className="space-y-2 border-b border-slate-100 px-4 py-3 last:border-0">
                   <input name="description" defaultValue={it.row.description} placeholder="Description" className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />

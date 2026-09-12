@@ -7,7 +7,7 @@ import RoleGate from '../components/RoleGate'
 import PatientForm from '../components/PatientForm'
 import PatientBadges from '../components/PatientBadges'
 import ToothChart from '../components/ToothChart'
-import { exportLedgerStatementPdf, exportPrescriptionPdf } from '../lib/pdf'
+import { exportLedgerStatementPdf, exportPrescriptionPdf, exportPaymentReceiptPdf } from '../lib/pdf'
 import { formatDate, formatDateTime, toDatetimeLocal } from '../lib/dates'
 import {
   Patient,
@@ -44,6 +44,11 @@ type Tab = 'info' | 'visits' | 'medical' | 'notes' | 'teeth' | 'photos' | 'ledge
 
 const EMPTY_RX: PrescriptionItem = { drug: '', dosage: '', frequency: '', duration: '', instructions: '' }
 
+const DOC_CATEGORIES = ['Photo', 'X-ray', 'Consent form', 'Lab result', 'Insurance', 'Other']
+function isImagePath(path: string) {
+  return /\.(jpe?g|png|gif|webp|heic|bmp)$/i.test(path)
+}
+
 const PATIENT_SELECT =
   '*, provider:providers(first_name,last_name), group:patient_groups(name), created_by_profile:profiles!patients_created_by_fkey(full_name,email), updated_by_profile:profiles!patients_updated_by_fkey(full_name,email)'
 
@@ -60,6 +65,8 @@ export default function PatientDetail() {
   const [visits, setVisits] = useState<Visit[]>([])
   const [records, setRecords] = useState<ClinicalRecord[]>([])
   const [photos, setPhotos] = useState<PatientPhoto[]>([])
+  const [photoThumbs, setPhotoThumbs] = useState<Record<string, string>>({})
+  const [docCategory, setDocCategory] = useState('Photo')
   const [ledger, setLedger] = useState<LedgerEntry[]>([])
   const [clinicCosts, setClinicCosts] = useState<Expense[]>([])
   const [conditions, setConditions] = useState<PatientCondition[]>([])
@@ -375,7 +382,8 @@ export default function PatientDetail() {
     if (!id) return
     const form = new FormData(e.currentTarget)
     const file = form.get('file') as File
-    const label = form.get('label') as string
+    const note = ((form.get('note') as string) || '').trim()
+    const label = note ? `${docCategory} — ${note}` : docCategory
     if (!file || file.size === 0) return
 
     const path = `${id}/${Date.now()}-${file.name}`
@@ -390,9 +398,48 @@ export default function PatientDetail() {
     })
     if (!error) {
       e.currentTarget.reset()
+      setDocCategory('Photo')
       load(id)
     } else alert(error.message)
   }
+
+  async function handleDeletePhoto(photo: PatientPhoto) {
+    if (!confirm('Delete this document? This cannot be undone.')) return
+    await supabase.storage.from('patient-photos').remove([photo.storage_path])
+    const { error } = await supabase.from('patient_photos').delete().eq('id', photo.id)
+    if (error) alert(error.message)
+    else if (id) load(id)
+  }
+
+  async function handleViewDocument(path: string) {
+    const { data, error } = await supabase.storage.from('patient-photos').createSignedUrl(path, 60)
+    if (error || !data) return alert('Could not open the file.')
+    window.open(data.signedUrl, '_blank', 'noopener')
+  }
+
+  // Fetch inline thumbnails for image documents (PDFs stay icon-only, opened via handleViewDocument).
+  useEffect(() => {
+    const imagePhotos = photos.filter((p) => isImagePath(p.storage_path) && !photoThumbs[p.id])
+    if (imagePhotos.length === 0) return
+    let cancelled = false
+    Promise.all(
+      imagePhotos.map(async (p) => {
+        const { data } = await supabase.storage.from('patient-photos').createSignedUrl(p.storage_path, 600)
+        return [p.id, data?.signedUrl] as const
+      }),
+    ).then((pairs) => {
+      if (cancelled) return
+      setPhotoThumbs((cur) => {
+        const next = { ...cur }
+        for (const [id2, url] of pairs) if (url) next[id2] = url
+        return next
+      })
+    })
+    return () => {
+      cancelled = true
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [photos])
 
   async function handleLedgerEntry(e: FormEvent<HTMLFormElement>, entryType: 'charge' | 'payment') {
     e.preventDefault()
@@ -562,7 +609,7 @@ export default function PatientDetail() {
     { key: 'medical', label: 'Medical history' },
     { key: 'notes', label: 'Clinical notes' },
     { key: 'teeth', label: 'Tooth chart' },
-    { key: 'photos', label: 'Photos' },
+    { key: 'photos', label: 'Documents & X-rays' },
     { key: 'ledger', label: 'Ledger' },
     { key: 'prescriptions', label: 'Prescriptions' },
   ]
@@ -1043,28 +1090,58 @@ export default function PatientDetail() {
       )}
 
       {tab === 'photos' && (
-        <RoleGate allow={['dentist']} fallback={<p className="text-sm text-slate-500">Photos are visible to dentists only.</p>}>
+        <RoleGate allow={['dentist']} fallback={<p className="text-sm text-slate-500">Documents are visible to dentists only.</p>}>
           <div className="space-y-4">
             <form onSubmit={handleUploadPhoto} className="flex flex-wrap items-end gap-3 rounded-xl border border-slate-200 bg-white p-4">
-              <input name="file" type="file" accept="image/*" required />
-              <input name="label" placeholder="Label (e.g. intraoral, x-ray)" className="rounded-lg border border-slate-300 px-3 py-2" />
+              <div>
+                <label className="mb-1 block text-xs text-slate-500">Category</label>
+                <select value={docCategory} onChange={(e) => setDocCategory(e.target.value)} className="rounded-lg border border-slate-300 px-3 py-2 text-sm">
+                  {DOC_CATEGORIES.map((c) => (
+                    <option key={c} value={c}>
+                      {c}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="mb-1 block text-xs text-slate-500">File (image or PDF)</label>
+                <input name="file" type="file" accept="image/*,application/pdf" required className="text-sm" />
+              </div>
+              <input name="note" placeholder="Note (optional)" className="rounded-lg border border-slate-300 px-3 py-2 text-sm" />
               <button type="submit" className="rounded-lg bg-navy-900 px-4 py-2 text-sm font-medium text-white hover:bg-navy-800">
                 Upload
               </button>
             </form>
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-              {photos.length === 0 && <p className="text-sm text-slate-500">No photos yet.</p>}
-              {photos.map((p) => (
-                <div key={p.id} className="rounded-xl border border-slate-200 bg-white p-2 text-center text-xs text-slate-500">
-                  {p.label ?? 'Photo'}
-                  <br />
-                  {formatDate(p.created_at)}
-                </div>
-              ))}
+              {photos.length === 0 && <p className="text-sm text-slate-500">No documents yet.</p>}
+              {photos.map((p) => {
+                const isImage = isImagePath(p.storage_path)
+                const thumb = photoThumbs[p.id]
+                return (
+                  <div key={p.id} className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+                    <button onClick={() => handleViewDocument(p.storage_path)} className="flex h-24 w-full items-center justify-center bg-slate-50 hover:bg-slate-100">
+                      {isImage && thumb ? (
+                        <img src={thumb} alt={p.label ?? 'Document'} className="h-full w-full object-cover" />
+                      ) : (
+                        <span className="text-3xl">{isImage ? '🖼️' : '📄'}</span>
+                      )}
+                    </button>
+                    <div className="p-2 text-center text-xs">
+                      <p className="truncate font-medium text-navy-800">{p.label ?? 'Document'}</p>
+                      <p className="text-slate-400">{formatDate(p.created_at)}</p>
+                      <div className="mt-1 flex items-center justify-center gap-2">
+                        <button onClick={() => handleViewDocument(p.storage_path)} className="text-navy-700 hover:underline">
+                          View
+                        </button>
+                        <button onClick={() => handleDeletePhoto(p)} className="text-red-600 hover:underline">
+                          Delete
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )
+              })}
             </div>
-            <p className="text-xs text-slate-400">
-              Thumbnails render once signed URLs are wired up — storage_path is saved and ready for that.
-            </p>
           </div>
         </RoleGate>
       )}
@@ -1195,6 +1272,11 @@ export default function PatientDetail() {
                         {row.ledger.entry_type === 'discount' ? '−' : '+'}
                         {money(Number(row.ledger.amount))}
                       </p>
+                      {row.ledger.entry_type === 'payment' && (
+                        <button onClick={() => exportPaymentReceiptPdf(patient, row.ledger, settings.currency)} className="text-xs font-medium text-navy-700 hover:underline">
+                          Receipt
+                        </button>
+                      )}
                       <button onClick={() => setEditingLedgerId(row.ledger.id)} className="text-xs font-medium text-navy-700 hover:underline">
                         Edit
                       </button>

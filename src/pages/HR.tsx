@@ -42,6 +42,24 @@ type HrTab = 'employees' | 'attendance' | 'leave' | 'deductions' | 'payroll' | '
 
 const card = 'space-y-3 rounded-xl border border-slate-200 bg-white p-4'
 
+// Supabase caps a single request at 1000 rows. Page through in 1000-row batches so
+// the profit-share pool (payments/expenses/misc income for a period) is never undercounted.
+async function fetchAllRows<T>(buildQuery: () => any): Promise<T[]> {
+  const step = 1000
+  const all: T[] = []
+  for (let from = 0; ; from += step) {
+    const { data, error } = await buildQuery().range(from, from + step - 1)
+    if (error) {
+      console.error(error)
+      break
+    }
+    const chunk = (data as T[]) ?? []
+    all.push(...chunk)
+    if (chunk.length < step) break
+  }
+  return all
+}
+
 export default function HR() {
   const { isDentist } = useAuth()
   const { settings } = useSettings()
@@ -1432,10 +1450,10 @@ function PayrollTab({ employees, settings, onChanged }: { employees: Employee[];
     // Net profit for the PREVIOUS period drives the profit-share bonus.
     const prevStartIso = new Date(`${prevStart}T00:00:00`).toISOString()
     const prevEndIso = new Date(`${prevEnd}T23:59:59`).toISOString()
-    const [{ data: pays }, { data: exps }, { data: misc }] = await Promise.all([
-      supabase.from('ledger_entries').select('amount').eq('entry_type', 'payment').gte('occurred_at', prevStartIso).lte('occurred_at', prevEndIso),
-      supabase.from('expenses').select('amount').gte('occurred_at', prevStartIso).lte('occurred_at', prevEndIso),
-      supabase.from('misc_income').select('amount').gte('occurred_at', prevStartIso).lte('occurred_at', prevEndIso),
+    const [pays, exps, misc] = await Promise.all([
+      fetchAllRows<any>(() => supabase.from('ledger_entries').select('amount').eq('entry_type', 'payment').gte('occurred_at', prevStartIso).lte('occurred_at', prevEndIso)),
+      fetchAllRows<any>(() => supabase.from('expenses').select('amount').gte('occurred_at', prevStartIso).lte('occurred_at', prevEndIso)),
+      fetchAllRows<any>(() => supabase.from('misc_income').select('amount').gte('occurred_at', prevStartIso).lte('occurred_at', prevEndIso)),
     ])
     const incomePrev = (pays ?? []).reduce((s, r: any) => s + Number(r.amount), 0) + (misc ?? []).reduce((s, r: any) => s + Number(r.amount), 0)
     const expensePrev = (exps ?? []).reduce((s, r: any) => s + Number(r.amount), 0)
@@ -1845,10 +1863,10 @@ function SummaryTab({ employees, settings }: { employees: Employee[]; settings: 
     // Profit-share pool comes from the previous period's net profit (bonuses lag one month).
     const prevStartIso = new Date(`${prevStart}T00:00:00`).toISOString()
     const prevEndIso = new Date(`${prevEnd}T23:59:59`).toISOString()
-    const [{ data: pays }, { data: exps }, { data: misc }] = await Promise.all([
-      supabase.from('ledger_entries').select('amount').eq('entry_type', 'payment').gte('occurred_at', prevStartIso).lte('occurred_at', prevEndIso),
-      supabase.from('expenses').select('amount').gte('occurred_at', prevStartIso).lte('occurred_at', prevEndIso),
-      supabase.from('misc_income').select('amount').gte('occurred_at', prevStartIso).lte('occurred_at', prevEndIso),
+    const [pays, exps, misc] = await Promise.all([
+      fetchAllRows<any>(() => supabase.from('ledger_entries').select('amount').eq('entry_type', 'payment').gte('occurred_at', prevStartIso).lte('occurred_at', prevEndIso)),
+      fetchAllRows<any>(() => supabase.from('expenses').select('amount').gte('occurred_at', prevStartIso).lte('occurred_at', prevEndIso)),
+      fetchAllRows<any>(() => supabase.from('misc_income').select('amount').gte('occurred_at', prevStartIso).lte('occurred_at', prevEndIso)),
     ])
     const netPrev =
       (pays ?? []).reduce((s, r: any) => s + Number(r.amount), 0) +

@@ -10,7 +10,7 @@ import { exportPatientsCsv, downloadPatientImportTemplate, importPatientsFromCsv
 const DURATION_OPTIONS = [15, 20, 30, 45, 60, 75, 90, 120]
 const WEEKDAY_FULL_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
 
-type Category = 'patients' | 'calendar' | 'providers' | 'procedures' | 'price-list' | 'financial' | 'team' | 'backup'
+type Category = 'patients' | 'calendar' | 'providers' | 'procedures' | 'price-list' | 'financial' | 'team' | 'backup' | 'errors'
 
 const CATEGORIES: { key: Category; label: string }[] = [
   { key: 'patients', label: 'Patients' },
@@ -21,6 +21,7 @@ const CATEGORIES: { key: Category; label: string }[] = [
   { key: 'financial', label: 'Financial' },
   { key: 'team', label: 'Team & access' },
   { key: 'backup', label: 'Backup & import' },
+  { key: 'errors', label: 'Error log' },
 ]
 
 const TEAM_ROLES: { value: string; label: string }[] = [
@@ -61,6 +62,10 @@ export default function Settings() {
 
   const [groups, setGroups] = useState<PatientGroup[]>([])
   const [newGroupName, setNewGroupName] = useState('')
+
+  const [errorLogs, setErrorLogs] = useState<{ id: string; created_at: string; message: string; source: string; url: string | null }[]>([])
+  const [errorLogsAvailable, setErrorLogsAvailable] = useState(true)
+  const [loadingErrorLogs, setLoadingErrorLogs] = useState(false)
 
   const [conditions, setConditions] = useState<{ id: string; name: string; active: boolean }[]>([])
   const [newConditionName, setNewConditionName] = useState('')
@@ -132,7 +137,21 @@ export default function Settings() {
     loadProcedures()
     loadExpenseCategories()
     loadTeam()
+    loadErrorLogs()
   }, [])
+
+  async function loadErrorLogs() {
+    setLoadingErrorLogs(true)
+    const { data, error } = await supabase.from('client_error_logs').select('id, created_at, message, source, url').order('created_at', { ascending: false }).limit(100)
+    if (error) {
+      // Table not created yet (e.g. pending a database migration) — show a friendly empty state instead of breaking Settings.
+      setErrorLogsAvailable(false)
+    } else {
+      setErrorLogsAvailable(true)
+      setErrorLogs(data ?? [])
+    }
+    setLoadingErrorLogs(false)
+  }
 
   async function loadTeam() {
     const [{ data: profs }, { data: roleRows }] = await Promise.all([
@@ -424,8 +443,20 @@ export default function Settings() {
     }
   }
   async function handleExportCsv() {
-    const { data } = await supabase.from('patients').select('*, provider:providers(first_name, last_name)')
-    exportPatientsCsv(data ?? [])
+    // Supabase caps a single request at 1000 rows — page through in batches so no patients are silently dropped.
+    const step = 1000
+    const all: any[] = []
+    for (let from = 0; ; from += step) {
+      const { data, error } = await supabase
+        .from('patients')
+        .select('*, provider:providers(first_name, last_name)')
+        .range(from, from + step - 1)
+      if (error) break
+      const chunk = data ?? []
+      all.push(...chunk)
+      if (chunk.length < step) break
+    }
+    exportPatientsCsv(all)
   }
   async function handleImportCsv(e: ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]
@@ -1114,6 +1145,39 @@ export default function Settings() {
             </label>
           </div>
           {importSummary && <p className="text-sm text-slate-600">{importSummary}</p>}
+        </div>
+      )}
+
+      {category === 'errors' && (
+        <div className={card}>
+          <div className="flex items-center justify-between">
+            <div>
+              <h2 className="font-medium text-navy-900">Error log</h2>
+              <p className="text-sm text-slate-500">Technical errors caught automatically while staff use the app — the last 100, newest first. Share this with your developer if something looks wrong.</p>
+            </div>
+            <button onClick={loadErrorLogs} className="shrink-0 rounded-lg border border-slate-300 px-3 py-1.5 text-sm text-navy-800 hover:bg-slate-50">
+              Refresh
+            </button>
+          </div>
+          {loadingErrorLogs ? (
+            <p className="text-sm text-slate-500">Loading…</p>
+          ) : !errorLogsAvailable ? (
+            <p className="text-sm text-slate-500">Error logging isn't set up on this database yet.</p>
+          ) : errorLogs.length === 0 ? (
+            <p className="text-sm text-slate-500">No errors recorded. 🎉</p>
+          ) : (
+            <div className="divide-y divide-slate-100">
+              {errorLogs.map((e) => (
+                <div key={e.id} className="py-2 text-sm">
+                  <p className="font-medium text-red-700">{e.message}</p>
+                  <p className="text-xs text-slate-400">
+                    {new Date(e.created_at).toLocaleString()} · {e.source}
+                    {e.url ? ` · ${e.url}` : ''}
+                  </p>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
     </div>

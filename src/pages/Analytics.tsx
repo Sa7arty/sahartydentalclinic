@@ -96,16 +96,16 @@ export default function Analytics() {
       fetchAll('misc_income', 'amount, occurred_at'),
       fetchAll('visits', 'scheduled_at, status, provider_id, patient_id'),
       fetchAll('patients', 'id, first_name, middle_name, last_name, title, gender, date_of_birth, provider_id, group_id, created_at'),
-      supabase.from('providers').select('id, first_name, last_name').range(0, 9999),
-      supabase.from('patient_groups').select('id, name').range(0, 9999),
+      fetchAll('providers', 'id, first_name, last_name'),
+      fetchAll('patient_groups', 'id, name'),
     ])
     setLedger(led)
     setExpenses(exp)
     setMisc(mi)
     setVisits(vis)
     setPatients(pat)
-    setProviders((prov.data as any) ?? [])
-    setGroups((grp.data as any) ?? [])
+    setProviders(prov as any)
+    setGroups(grp as any)
     setLoading(false)
   }
 

@@ -54,33 +54,36 @@ export default function PatientsList() {
     }
   }, [showNewForm, settings.auto_generate_file_number])
 
-  // Supabase caps a single query at 1000 rows, so fetch the full patient list in batches.
-  async function fetchAllPatients() {
+  // Supabase caps a single query at 1000 rows, so fetch large tables in batches.
+  async function fetchAllRows<T>(buildQuery: () => any): Promise<T[]> {
     const CHUNK = 1000
-    const all: Patient[] = []
+    const all: T[] = []
     for (let from = 0; ; from += CHUNK) {
-      const { data, error } = await supabase
-        .from('patients')
-        .select('*, provider:providers(first_name,last_name), group:patient_groups(name)')
-        .order('first_name')
-        .range(from, from + CHUNK - 1)
+      const { data, error } = await buildQuery().range(from, from + CHUNK - 1)
       if (error) break
-      const batch = (data ?? []) as Patient[]
+      const batch = (data ?? []) as T[]
       all.push(...batch)
       if (batch.length < CHUNK) break
     }
     return all
   }
+  function fetchAllPatients() {
+    return fetchAllRows<Patient>(() =>
+      supabase.from('patients').select('*, provider:providers(first_name,last_name), group:patient_groups(name)').order('first_name').order('id', { ascending: true }),
+    )
+  }
 
   async function load() {
     setLoading(true)
-    const [p, { data: l }, { data: pr }, { data: g }, { data: cond }, { data: pastVisits }] = await Promise.all([
+    const [p, { data: l }, { data: pr }, { data: g }, cond, pastVisits] = await Promise.all([
       fetchAllPatients(),
       supabase.from('locations').select('*').order('name'),
       supabase.from('providers').select('*').eq('active', true).order('first_name'),
       supabase.from('patient_groups').select('*').order('name'),
-      supabase.from('patient_conditions').select('patient_id').range(0, 99999),
-      supabase.from('visits').select('patient_id, scheduled_at').lte('scheduled_at', new Date().toISOString()).order('scheduled_at', { ascending: false }),
+      fetchAllRows<any>(() => supabase.from('patient_conditions').select('patient_id')),
+      fetchAllRows<any>(() =>
+        supabase.from('visits').select('patient_id, scheduled_at').lte('scheduled_at', new Date().toISOString()).order('scheduled_at', { ascending: false }).order('id', { ascending: true }),
+      ),
     ])
     setPatients(p)
     setLocations(l ?? [])

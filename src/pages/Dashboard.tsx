@@ -3,10 +3,11 @@ import { Link } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { useSettings } from '../context/SettingsContext'
 import { Visit, Patient, Location, Provider, patientFullName, providerFullName, telHref, whatsappHref, visitRowClass, visitTextClass } from '../types'
+import { exportDailyHuddleSheetPdf } from '../lib/pdf'
 import { toYmd, fromYmd, startOfWeek, dayStart, dayEnd } from '../lib/dates'
 
 type VisitRow = Visit & {
-  patient: Pick<Patient, 'id' | 'first_name' | 'middle_name' | 'last_name' | 'phone'> | null
+  patient: Pick<Patient, 'id' | 'first_name' | 'middle_name' | 'last_name' | 'phone' | 'file_number' | 'is_smoker'> | null
   location: Pick<Location, 'name'> | null
   provider: Pick<Provider, 'first_name' | 'last_name'> | null
 }
@@ -46,6 +47,7 @@ export default function Dashboard() {
   const [todaysVisits, setTodaysVisits] = useState<VisitRow[]>([])
   const [tomorrowsVisits, setTomorrowsVisits] = useState<VisitRow[]>([])
   const [balances, setBalances] = useState<BalanceRow[]>([])
+  const [balanceByPatient, setBalanceByPatient] = useState<Record<string, number>>({})
   const [todayStats, setTodayStats] = useState<Stats>(emptyStats)
   const [yesterdayStats, setYesterdayStats] = useState<Stats>(emptyStats)
   const [weekStats, setWeekStats] = useState<Stats>(emptyStats)
@@ -80,13 +82,13 @@ export default function Dashboard() {
     const [{ data: todays }, { data: tomorrows }, ledgerRows, todayData, yesterdayData, weekData, lastWeekData, monthData] = await Promise.all([
       supabase
         .from('visits')
-        .select('*, patient:patients(id, first_name, middle_name, last_name, phone), location:locations(name), provider:providers(first_name,last_name)')
+        .select('*, patient:patients(id, first_name, middle_name, last_name, phone, file_number, is_smoker), location:locations(name), provider:providers(first_name,last_name)')
         .gte('scheduled_at', dayStart(toYmd(now)).toISOString())
         .lte('scheduled_at', dayEnd(toYmd(now)).toISOString())
         .order('scheduled_at', { ascending: true }),
       supabase
         .from('visits')
-        .select('*, patient:patients(id, first_name, middle_name, last_name, phone), location:locations(name), provider:providers(first_name,last_name)')
+        .select('*, patient:patients(id, first_name, middle_name, last_name, phone, file_number, is_smoker), location:locations(name), provider:providers(first_name,last_name)')
         .gte('scheduled_at', dayStart(toYmd(tomorrow)).toISOString())
         .lte('scheduled_at', dayEnd(toYmd(tomorrow)).toISOString())
         .order('scheduled_at', { ascending: true }),
@@ -118,17 +120,48 @@ export default function Dashboard() {
       byPatient.set(key, existing)
     }
     setBalances(Array.from(byPatient.values()).filter((b) => b.balance > 0).sort((a, b) => b.balance - a.balance))
+    setBalanceByPatient(Object.fromEntries(Array.from(byPatient.entries()).map(([pid, b]) => [pid, b.balance])))
 
     setLoading(false)
   }
 
+  // Pulls allergies/conditions for today's patients on demand (only needed when printing the huddle sheet).
+  async function handlePrintHuddleSheet() {
+    const patientIds = Array.from(new Set(todaysVisits.map((v) => v.patient?.id).filter((x): x is string => !!x)))
+    const [{ data: alg }, { data: cond }] = await Promise.all([
+      patientIds.length ? supabase.from('patient_allergies').select('patient_id, name').in('patient_id', patientIds) : Promise.resolve({ data: [] as any[] }),
+      patientIds.length ? supabase.from('patient_conditions').select('patient_id, condition').in('patient_id', patientIds) : Promise.resolve({ data: [] as any[] }),
+    ])
+    const alertsByPatient = new Map<string, string[]>()
+    for (const a of alg ?? []) alertsByPatient.set(a.patient_id, [...(alertsByPatient.get(a.patient_id) ?? []), a.name])
+    for (const c of cond ?? []) alertsByPatient.set(c.patient_id, [...(alertsByPatient.get(c.patient_id) ?? []), c.condition])
+
+    const rows = todaysVisits
+      .slice()
+      .sort((a, b) => a.scheduled_at.localeCompare(b.scheduled_at))
+      .map((v) => {
+        const pid = v.patient?.id
+        const alerts = [...(pid ? alertsByPatient.get(pid) ?? [] : []), v.patient?.is_smoker ? 'Smoker' : null].filter(Boolean) as string[]
+        return {
+          time: new Date(v.scheduled_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          patientName: v.patient ? patientFullName(v.patient) : 'Unknown patient',
+          fileNumber: v.patient?.file_number ?? null,
+          provider: v.provider ? providerFullName(v.provider) : 'No provider',
+          status: v.status,
+          balance: pid ? balanceByPatient[pid] ?? 0 : 0,
+          alerts: alerts.join(', '),
+        }
+      })
+    exportDailyHuddleSheetPdf(toYmd(now).split('-').reverse().join('/'), settings.currency, rows)
+  }
+
   async function loadStats(from: Date, to: Date): Promise<Stats> {
-    const [{ count: visits }, { data: payments }, { data: expenseRows }, { count: newPatients }, { data: discountRows }] = await Promise.all([
+    const [{ count: visits }, payments, expenseRows, { count: newPatients }, discountRows] = await Promise.all([
       supabase.from('visits').select('id', { count: 'exact', head: true }).gte('scheduled_at', from.toISOString()).lte('scheduled_at', to.toISOString()),
-      supabase.from('ledger_entries').select('amount').eq('entry_type', 'payment').gte('occurred_at', from.toISOString()).lte('occurred_at', to.toISOString()).range(0, 99999),
-      supabase.from('expenses').select('amount').gte('expense_date', toYmd(from)).lte('expense_date', toYmd(to)).range(0, 99999),
+      fetchAllRows<any>(() => supabase.from('ledger_entries').select('amount').eq('entry_type', 'payment').gte('occurred_at', from.toISOString()).lte('occurred_at', to.toISOString())),
+      fetchAllRows<any>(() => supabase.from('expenses').select('amount').gte('expense_date', toYmd(from)).lte('expense_date', toYmd(to))),
       supabase.from('patients').select('id', { count: 'exact', head: true }).gte('created_at', from.toISOString()).lte('created_at', to.toISOString()),
-      supabase.from('ledger_entries').select('amount').eq('entry_type', 'discount').gte('occurred_at', from.toISOString()).lte('occurred_at', to.toISOString()).range(0, 99999),
+      fetchAllRows<any>(() => supabase.from('ledger_entries').select('amount').eq('entry_type', 'discount').gte('occurred_at', from.toISOString()).lte('occurred_at', to.toISOString())),
     ])
     const revenue = (payments ?? []).reduce((sum, p: any) => sum + Number(p.amount), 0)
     const expenseTotal = (expenseRows ?? []).reduce((sum, e: any) => sum + Number(e.amount), 0)
@@ -138,9 +171,16 @@ export default function Dashboard() {
 
   if (loading) return <p className="text-navy-700">Loading dashboard…</p>
 
-  const appointmentSection = (title: string, list: VisitRow[]) => (
+  const appointmentSection = (title: string, list: VisitRow[], onPrint?: () => void) => (
     <section>
-      <h2 className="mb-3 text-lg font-medium text-navy-800">{title}</h2>
+      <div className="mb-3 flex items-center justify-between gap-2">
+        <h2 className="text-lg font-medium text-navy-800">{title}</h2>
+        {onPrint && (
+          <button onClick={onPrint} className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium text-navy-800 hover:bg-slate-50">
+            🖨️ Print huddle sheet
+          </button>
+        )}
+      </div>
       {list.length === 0 ? (
         <p className="text-sm text-slate-500">Nothing scheduled.</p>
       ) : (
@@ -239,7 +279,7 @@ export default function Dashboard() {
       </section>
 
       <div className="grid gap-4 sm:grid-cols-2">
-        {appointmentSection("Today's appointments", todaysVisits)}
+        {appointmentSection("Today's appointments", todaysVisits, handlePrintHuddleSheet)}
         {appointmentSection("Tomorrow's appointments", tomorrowsVisits)}
       </div>
 

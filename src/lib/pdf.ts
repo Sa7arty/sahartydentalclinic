@@ -1,5 +1,44 @@
 import jsPDF from 'jspdf'
-import { LedgerEntry, Patient, PrescriptionItem, patientFullName } from '../types'
+import { LedgerEntry, Patient, PrescriptionItem, patientFullName, PaymentMethod, PAYMENT_METHOD_LABELS } from '../types'
+
+export function exportPaymentReceiptPdf(
+  patient: Pick<Patient, 'first_name' | 'middle_name' | 'last_name' | 'file_number'>,
+  entry: { amount: number; occurred_at: string; payment_method: PaymentMethod | null; description?: string | null },
+  currency: string,
+) {
+  const doc = new jsPDF()
+  const receiptNo = new Date(entry.occurred_at).getTime().toString().slice(-8)
+
+  doc.setFontSize(16)
+  doc.text('Saharty Dental Clinic', 14, 18)
+  doc.setFontSize(12)
+  doc.text('Payment Receipt', 14, 26)
+  doc.setFontSize(9)
+  doc.text(`Receipt #${receiptNo}`, 196, 18, { align: 'right' })
+  doc.text(`Printed: ${new Date().toLocaleString()}`, 196, 24, { align: 'right' })
+
+  doc.setFontSize(10)
+  doc.text(`Patient: ${patientFullName(patient)}`, 14, 40)
+  if (patient.file_number) doc.text(`File #: ${patient.file_number}`, 14, 46)
+  doc.text(`Date received: ${new Date(entry.occurred_at).toLocaleString()}`, 14, 52)
+  doc.line(14, 60, 196, 60)
+
+  doc.setFontSize(11)
+  doc.text('Received with thanks:', 14, 74)
+  doc.setFontSize(20)
+  doc.setFont('helvetica', 'bold')
+  doc.text(`${currency} ${Number(entry.amount).toFixed(2)}`, 14, 88)
+  doc.setFont('helvetica', 'normal')
+  doc.setFontSize(11)
+  doc.text(`Payment method: ${entry.payment_method ? PAYMENT_METHOD_LABELS[entry.payment_method] : 'Not specified'}`, 14, 100)
+  if (entry.description) doc.text(doc.splitTextToSize(`Note: ${entry.description}`, 180), 14, 108)
+
+  doc.setFontSize(9)
+  doc.text('Thank you for your payment.', 14, 270)
+  doc.text('Signature: ____________________________', 120, 280)
+
+  doc.save(`receipt-${receiptNo}-${(patient.file_number ?? patientFullName(patient)).replace(/\s+/g, '-')}.pdf`)
+}
 
 export function exportPrescriptionPdf(
   patient: Patient,
@@ -333,6 +372,68 @@ export function exportStaffSummaryPdf(
   doc.text(`${currency} ${totalNet.toFixed(2)}`, 196, y, { align: 'right' })
 
   doc.save(`staff-summary-${monthLabel.replace(/\s+/g, '-')}.pdf`)
+}
+
+export interface HuddleSheetRow {
+  time: string
+  patientName: string
+  fileNumber: string | null
+  provider: string
+  status: string
+  balance: number
+  alerts: string
+}
+
+export function exportDailyHuddleSheetPdf(dateLabel: string, currency: string, rows: HuddleSheetRow[]) {
+  const doc = new jsPDF()
+  doc.setFontSize(16)
+  doc.text('Saharty Dental Clinic', 14, 18)
+  doc.setFontSize(12)
+  doc.text(`Daily Huddle Sheet — ${dateLabel}`, 14, 26)
+  doc.setFontSize(9)
+  doc.text(`Printed: ${new Date().toLocaleString()}`, 14, 32)
+
+  let y = 44
+  const header = () => {
+    doc.setFontSize(9)
+    doc.setFont('helvetica', 'bold')
+    doc.text('Time', 14, y)
+    doc.text('Patient', 36, y)
+    doc.text('Provider', 100, y)
+    doc.text('Status', 138, y)
+    doc.text(`Balance (${currency})`, 196, y, { align: 'right' })
+    doc.setFont('helvetica', 'normal')
+    y += 4
+    doc.line(14, y, 196, y)
+    y += 6
+  }
+  header()
+
+  if (rows.length === 0) doc.text('Nothing scheduled today.', 14, y)
+  for (const r of rows) {
+    if (y > 265) {
+      doc.addPage()
+      y = 20
+      header()
+    }
+    doc.setFontSize(9)
+    doc.text(r.time, 14, y)
+    doc.text(`${r.patientName}${r.fileNumber ? ` (#${r.fileNumber})` : ''}`.slice(0, 42), 36, y)
+    doc.text(r.provider.slice(0, 22), 100, y)
+    doc.text(r.status, 138, y)
+    doc.text(r.balance.toFixed(2), 196, y, { align: 'right' })
+    y += 6
+    if (r.alerts) {
+      doc.setFontSize(8)
+      doc.setTextColor(180, 40, 40)
+      doc.text(`⚠ ${r.alerts}`.slice(0, 100), 36, y)
+      doc.setTextColor(0, 0, 0)
+      y += 5
+    }
+    y += 2
+  }
+
+  doc.save(`huddle-sheet-${dateLabel.replace(/\//g, '-')}.pdf`)
 }
 
 export function exportDaySchedulePdf(dateLabel: string, visits: { time: string; patientName: string; status: string }[]) {

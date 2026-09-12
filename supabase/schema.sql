@@ -887,3 +887,82 @@ create policy "staff manage counts" on public.inventory_counts for all
 --    insert into public.staff_locations (user_id, location_id)
 --      select '<user-id>', id from public.locations where name = 'Saharty Dental Clinic';
 -- ============================================================
+
+-- ============================================================
+-- KNOWN DRIFT — applied to the live database since this file was last
+-- regenerated (2026-07-13) but not yet re-synced here. This file is a
+-- fresh-install bootstrap, not a running log, so many later additions
+-- (expense categories/items, misc_income, recurring_expenses, employee
+-- HR tables, tooth_records, patient_conditions/allergies/medications,
+-- staff loans, the historical data imports, etc.) are simply not listed
+-- below — they exist live but a full column-by-column diff against the
+-- live database is still needed to bring this file current. What follows
+-- is only the subset of changes this session ran and can state exactly.
+-- Do not re-run any of this against a database that already has it.
+-- ============================================================
+
+alter table public.app_settings add column if not exists big_debt_threshold numeric not null default 1000;
+alter table public.app_settings add column if not exists visit_provider_required boolean not null default false;
+
+alter table public.visits add column if not exists source_uid text;
+create unique index if not exists visits_source_uid_uidx on public.visits(source_uid) where source_uid is not null;
+
+create table if not exists public.prescriptions (
+  id uuid primary key default gen_random_uuid(),
+  patient_id uuid not null references public.patients(id) on delete cascade,
+  prescriber_name text,
+  notes text,
+  items jsonb not null default '[]'::jsonb,
+  created_by uuid default auth.uid(),
+  created_at timestamptz not null default now()
+);
+create index if not exists prescriptions_patient_idx on public.prescriptions(patient_id);
+alter table public.prescriptions enable row level security;
+create policy "staff manage prescriptions for accessible patients"
+on public.prescriptions for all
+using (
+  has_role(auth.uid(), 'dentist'::app_role)
+  or exists (select 1 from public.patients p where p.id = prescriptions.patient_id and has_location_access(auth.uid(), p.primary_location_id))
+)
+with check (
+  has_role(auth.uid(), 'dentist'::app_role)
+  or exists (select 1 from public.patients p where p.id = prescriptions.patient_id and has_location_access(auth.uid(), p.primary_location_id))
+);
+
+-- patients had no DELETE policy at all — under RLS that means every delete was
+-- silently rejected (0 rows removed, no error). Fixed 2026-08.
+create policy "staff delete patients in their locations" on public.patients for delete
+using (has_role(auth.uid(), 'dentist'::app_role) or has_location_access(auth.uid(), primary_location_id));
+
+-- ledger_entries had only INSERT + SELECT policies — edits/deletes on the ledger
+-- (e.g. correcting a discount) were silently rejected the same way. Fixed 2026-08.
+create policy "staff update ledger entries for accessible patients" on public.ledger_entries for update
+using (has_role(auth.uid(), 'dentist'::app_role) or exists (select 1 from public.patients p where p.id = ledger_entries.patient_id and has_location_access(auth.uid(), p.primary_location_id)))
+with check (has_role(auth.uid(), 'dentist'::app_role) or exists (select 1 from public.patients p where p.id = ledger_entries.patient_id and has_location_access(auth.uid(), p.primary_location_id)));
+create policy "staff delete ledger entries for accessible patients" on public.ledger_entries for delete
+using (has_role(auth.uid(), 'dentist'::app_role) or exists (select 1 from public.patients p where p.id = ledger_entries.patient_id and has_location_access(auth.uid(), p.primary_location_id)));
+
+-- ============================================================
+-- QUEUED — written by this session, NOT YET APPLIED to the live database.
+-- The Supabase management connection was disconnected when this was written;
+-- run this block (or wait for the next session to run it) to enable the new
+-- Settings → Error log feature.
+-- ============================================================
+
+create table if not exists public.client_error_logs (
+  id uuid primary key default gen_random_uuid(),
+  created_at timestamptz not null default now(),
+  message text not null,
+  stack text,
+  source text not null,
+  url text,
+  user_agent text,
+  user_id uuid default auth.uid()
+);
+create index if not exists client_error_logs_created_at_idx on public.client_error_logs(created_at desc);
+alter table public.client_error_logs enable row level security;
+-- Any signed-in staff member can report an error (insert), but only the owner reads them.
+create policy "authenticated can insert error logs" on public.client_error_logs for insert
+with check (auth.uid() is not null);
+create policy "dentist reads error logs" on public.client_error_logs for select
+using (has_role(auth.uid(), 'dentist'::app_role));
