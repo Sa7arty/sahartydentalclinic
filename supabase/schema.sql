@@ -942,13 +942,8 @@ with check (has_role(auth.uid(), 'dentist'::app_role) or exists (select 1 from p
 create policy "staff delete ledger entries for accessible patients" on public.ledger_entries for delete
 using (has_role(auth.uid(), 'dentist'::app_role) or exists (select 1 from public.patients p where p.id = ledger_entries.patient_id and has_location_access(auth.uid(), p.primary_location_id)));
 
--- ============================================================
--- QUEUED — written by this session, NOT YET APPLIED to the live database.
--- The Supabase management connection was disconnected when this was written;
--- run this block (or wait for the next session to run it) to enable the new
--- Settings → Error log feature.
--- ============================================================
-
+-- Powers Settings → Error log. Applied 2026-09-12 (was queued, then run once
+-- the admin connection reconnected).
 create table if not exists public.client_error_logs (
   id uuid primary key default gen_random_uuid(),
   created_at timestamptz not null default now(),
@@ -966,3 +961,43 @@ create policy "authenticated can insert error logs" on public.client_error_logs 
 with check (auth.uid() is not null);
 create policy "dentist reads error logs" on public.client_error_logs for select
 using (has_role(auth.uid(), 'dentist'::app_role));
+
+-- Tooth chart rebuild (2026-09-12): surface-level procedure charting with a
+-- configurable scope (surface/multi-surface/whole tooth/sextant/arch/whole
+-- mouth) and a planned/in-progress/completed status. The old tooth_records
+-- table (whole-tooth baseline condition — Healthy/Missing/etc.) is untouched
+-- and still used alongside this.
+create type public.chart_scope as enum ('surface', 'multi_surface', 'whole_tooth', 'sextant', 'arch', 'whole_mouth');
+create type public.chart_status as enum ('planned', 'in_progress', 'completed');
+
+alter table public.procedures add column if not exists default_scope public.chart_scope not null default 'whole_tooth';
+
+create table if not exists public.tooth_procedures (
+  id uuid primary key default gen_random_uuid(),
+  patient_id uuid not null references public.patients(id) on delete cascade,
+  procedure_id uuid references public.procedures(id) on delete set null,
+  procedure_name text not null,
+  scope public.chart_scope not null,
+  teeth int[] not null default '{}',
+  surfaces text[] not null default '{}',
+  status public.chart_status not null default 'planned',
+  visit_id uuid references public.visits(id) on delete set null,
+  provider_id uuid references public.providers(id) on delete set null,
+  note text,
+  price numeric,
+  created_at timestamptz not null default now(),
+  created_by uuid default auth.uid(),
+  updated_at timestamptz not null default now()
+);
+create index if not exists tooth_procedures_patient_idx on public.tooth_procedures(patient_id);
+alter table public.tooth_procedures enable row level security;
+create policy "staff manage tooth procedures for accessible patients"
+on public.tooth_procedures for all
+using (
+  has_role(auth.uid(), 'dentist'::app_role)
+  or exists (select 1 from public.patients p where p.id = tooth_procedures.patient_id and has_location_access(auth.uid(), p.primary_location_id))
+)
+with check (
+  has_role(auth.uid(), 'dentist'::app_role)
+  or exists (select 1 from public.patients p where p.id = tooth_procedures.patient_id and has_location_access(auth.uid(), p.primary_location_id))
+);
