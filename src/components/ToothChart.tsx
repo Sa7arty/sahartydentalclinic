@@ -207,6 +207,33 @@ export default function ToothChart({ patientId }: { patientId: string }) {
   const surfaceColorsFor = (n: number) => (mode === 'diagnosis' ? diagnosisColors[n] ?? {} : statusColors[n] ?? {})
 
   // ---------------- Diagnosis mode ----------------
+  // "Armed" condition = fast bulk mode: press a condition below the chart, then
+  // click through teeth to toggle that whole-tooth finding on/off, no dialog.
+  const [armedCondition, setArmedCondition] = useState<DiagnosisCondition | null>(null)
+
+  function toggleArmed(c: DiagnosisCondition) {
+    setDiagOpen(false)
+    setArmedCondition((cur) => (cur === c ? null : c))
+  }
+
+  async function handleArmedToothClick(tooth: number) {
+    if (!armedCondition) return
+    const existing = diagnoses.find((d) => d.tooth === tooth && d.active && d.surfaces.length === 0 && d.condition === armedCondition)
+    if (existing) {
+      const { error } = await supabase.from('tooth_diagnoses').update({ active: false, updated_at: new Date().toISOString() }).eq('id', existing.id)
+      if (error) return alert(error.message)
+      setDiagnoses((cur) => cur.map((d) => (d.id === existing.id ? { ...d, active: false } : d)))
+    } else {
+      const { data, error } = await supabase
+        .from('tooth_diagnoses')
+        .insert({ patient_id: patientId, tooth, surfaces: [], condition: armedCondition, note: null, source: 'manual' })
+        .select()
+        .single()
+      if (error) return alert(error.message)
+      setDiagnoses((cur) => [...cur, data as ToothDiagnosis])
+    }
+  }
+
   function openDiagnosisPanel(tooth: number, surface?: ToothSurface) {
     setDiagEditingId(null)
     setDiagTooth(tooth)
@@ -422,8 +449,10 @@ export default function ToothChart({ patientId }: { patientId: string }) {
   }
 
   function handleToothClick(n: number, surface?: ToothSurface) {
-    if (mode === 'diagnosis') openDiagnosisPanel(n, surface)
-    else openTreatmentPanel(n, surface)
+    if (mode === 'diagnosis') {
+      if (armedCondition) handleArmedToothClick(n)
+      else openDiagnosisPanel(n, surface)
+    } else openTreatmentPanel(n, surface)
   }
 
   if (loading) return <p className="text-sm text-slate-500">Loading…</p>
@@ -443,7 +472,10 @@ export default function ToothChart({ patientId }: { patientId: string }) {
           🩺 Diagnosis
         </button>
         <button
-          onClick={() => setMode('treatment')}
+          onClick={() => {
+            setArmedCondition(null)
+            setMode('treatment')
+          }}
           className={`rounded-md px-4 py-1.5 font-medium ${mode === 'treatment' ? 'bg-navy-900 text-white' : 'text-navy-700 hover:bg-slate-100'}`}
         >
           📋 Treatment plan
@@ -452,7 +484,12 @@ export default function ToothChart({ patientId }: { patientId: string }) {
 
       <div className="rounded-xl border border-slate-200 bg-white p-4">
         <p className="mb-3 text-xs text-slate-500">
-          Upper arch — click a surface to {mode === 'diagnosis' ? 'record a finding' : 'chart a procedure'}, or click the number for the whole tooth.
+          Upper arch
+          {mode === 'diagnosis'
+            ? armedCondition
+              ? ` — click any tooth to mark it "${DIAGNOSIS_CONDITION_LABELS[armedCondition]}".`
+              : ' — click a surface to record a finding, or the number for the whole tooth.'
+            : ' — click a surface to chart a procedure, or the number for the whole tooth.'}
         </p>
         <div className="flex flex-wrap justify-center gap-2">
           {UPPER_ROW.map((n) => (
@@ -478,21 +515,43 @@ export default function ToothChart({ patientId }: { patientId: string }) {
         <p className="mt-3 text-center text-xs text-slate-500">Lower arch</p>
       </div>
 
-      <div className="flex flex-wrap gap-3 text-xs text-slate-600">
-        {mode === 'diagnosis'
-          ? (Object.keys(DIAGNOSIS_CONDITION_LABELS) as DiagnosisCondition[]).map((c) => (
-              <span key={c} className="flex items-center gap-1">
+      {mode === 'diagnosis' ? (
+        <div className="space-y-1.5">
+          <div className="flex flex-wrap gap-1.5 text-xs">
+            {(Object.keys(DIAGNOSIS_CONDITION_LABELS) as DiagnosisCondition[]).map((c) => (
+              <button
+                key={c}
+                onClick={() => toggleArmed(c)}
+                className={`flex items-center gap-1.5 rounded-full border px-2.5 py-1 font-medium transition ${
+                  armedCondition === c ? 'border-navy-900 bg-navy-900 text-white' : 'border-slate-300 text-slate-600 hover:bg-slate-50'
+                }`}
+              >
                 <span className="inline-block h-3 w-3 rounded-full border border-slate-300" style={{ backgroundColor: DIAGNOSIS_CONDITION_COLORS[c] }} />
                 {DIAGNOSIS_CONDITION_LABELS[c]}
-              </span>
-            ))
-          : (Object.keys(CHART_STATUS_LABELS) as ChartStatus[]).map((s) => (
-              <span key={s} className="flex items-center gap-1">
-                <span className="inline-block h-3 w-3 rounded-full" style={{ backgroundColor: CHART_STATUS_COLORS[s] }} />
-                {CHART_STATUS_LABELS[s]}
-              </span>
+              </button>
             ))}
-      </div>
+          </div>
+          <p className="text-xs text-slate-500">
+            {armedCondition ? (
+              <>
+                <span className="font-medium text-navy-800">{DIAGNOSIS_CONDITION_LABELS[armedCondition]}</span> is armed — click every tooth that has it (click again to remove). Press the pill again when
+                done.
+              </>
+            ) : (
+              'Press a condition above, then click through the teeth that have it. Or click a specific tooth/surface on the chart for finer detail (notes, one surface only, etc.).'
+            )}
+          </p>
+        </div>
+      ) : (
+        <div className="flex flex-wrap gap-3 text-xs text-slate-600">
+          {(Object.keys(CHART_STATUS_LABELS) as ChartStatus[]).map((s) => (
+            <span key={s} className="flex items-center gap-1">
+              <span className="inline-block h-3 w-3 rounded-full" style={{ backgroundColor: CHART_STATUS_COLORS[s] }} />
+              {CHART_STATUS_LABELS[s]}
+            </span>
+          ))}
+        </div>
+      )}
 
       {/* ---------------- Diagnosis panel ---------------- */}
       {diagOpen && diagTooth !== null && (
@@ -742,9 +801,6 @@ export default function ToothChart({ patientId }: { patientId: string }) {
         <button onClick={() => openTreatmentPanel()} className="rounded-lg bg-gold-500 px-4 py-2 text-sm font-medium text-navy-950 hover:bg-gold-400">
           + Chart a procedure
         </button>
-      )}
-      {mode === 'diagnosis' && !diagOpen && (
-        <p className="text-xs text-slate-500">Click any tooth surface (or its number for the whole tooth) above to log a finding.</p>
       )}
 
       {/* ---------------- History ---------------- */}
