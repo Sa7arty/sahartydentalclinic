@@ -105,6 +105,17 @@ export interface ProcedureCategory {
   active: boolean
 }
 
+export type ChartScope = 'surface' | 'multi_surface' | 'whole_tooth' | 'sextant' | 'arch' | 'whole_mouth'
+
+export const CHART_SCOPE_LABELS: Record<ChartScope, string> = {
+  surface: 'Single surface',
+  multi_surface: 'Multiple surfaces',
+  whole_tooth: 'Whole tooth',
+  sextant: 'Sextant',
+  arch: 'Whole arch',
+  whole_mouth: 'Whole mouth',
+}
+
 export interface Procedure {
   id: string
   category_id: string | null
@@ -114,6 +125,7 @@ export interface Procedure {
   description: string | null
   default_duration_minutes: number | null
   default_price: number | null
+  default_scope: ChartScope
   active: boolean
 }
 
@@ -500,6 +512,50 @@ export interface ToothRecord {
   status: ToothStatus
   note: string | null
   updated_by: string | null
+  updated_at: string
+}
+
+// Universal 5-part surface codes used on the chart:
+// M = mesial, D = distal, B = buccal/facial, L = lingual/palatal, O = occlusal/incisal.
+export type ToothSurface = 'M' | 'D' | 'B' | 'L' | 'O'
+export const SURFACE_LABELS: Record<ToothSurface, string> = {
+  M: 'Mesial',
+  D: 'Distal',
+  B: 'Buccal/Facial',
+  L: 'Lingual/Palatal',
+  O: 'Occlusal/Incisal',
+}
+export const ALL_SURFACES: ToothSurface[] = ['M', 'O', 'D', 'B', 'L']
+
+export type ChartStatus = 'planned' | 'in_progress' | 'completed'
+export const CHART_STATUS_LABELS: Record<ChartStatus, string> = {
+  planned: 'Planned',
+  in_progress: 'In progress',
+  completed: 'Completed',
+}
+// Color = status only (by design): you can tell WHAT was done by hovering/opening
+// the entry — the chart itself only needs to answer "what still needs doing".
+export const CHART_STATUS_COLORS: Record<ChartStatus, string> = {
+  planned: '#3b82f6',
+  in_progress: '#f59e0b',
+  completed: '#22c55e',
+}
+
+export interface ToothProcedure {
+  id: string
+  patient_id: string
+  procedure_id: string | null
+  procedure_name: string
+  scope: ChartScope
+  teeth: number[]
+  surfaces: ToothSurface[]
+  status: ChartStatus
+  visit_id: string | null
+  provider_id: string | null
+  note: string | null
+  price: number | null
+  created_at: string
+  created_by: string | null
   updated_at: string
 }
 

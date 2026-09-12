@@ -2,7 +2,7 @@ import { ChangeEvent, FormEvent, useEffect, useRef, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../context/AuthContext'
 import { useSettings } from '../context/SettingsContext'
-import { Provider, PatientGroup, ProcedureCategory, Procedure, ExpenseCategory, ExpenseItem, providerFullName, REQUIRABLE_PATIENT_FIELDS, DENTAL_SPECIALTIES } from '../types'
+import { Provider, PatientGroup, ProcedureCategory, Procedure, ExpenseCategory, ExpenseItem, providerFullName, REQUIRABLE_PATIENT_FIELDS, DENTAL_SPECIALTIES, ChartScope, CHART_SCOPE_LABELS } from '../types'
 import { WORLD_COUNTRIES } from '../data/countries'
 import { WEEKDAY_NAMES_FROM } from '../lib/dates'
 import { exportPatientsCsv, downloadPatientImportTemplate, importPatientsFromCsv } from '../lib/csv'
@@ -811,7 +811,11 @@ export default function Settings() {
                               {p.name} {p.code && <span className="text-xs font-normal text-slate-400">({p.code})</span>} {!p.active && <span className="text-xs font-normal text-slate-400">· inactive</span>}
                             </p>
                             <p className="text-xs text-slate-500">
-                              {[p.default_duration_minutes ? `${p.default_duration_minutes} min` : null, p.default_price != null ? `${settings.currency} ${Number(p.default_price).toFixed(2)}` : null]
+                              {[
+                                p.default_duration_minutes ? `${p.default_duration_minutes} min` : null,
+                                p.default_price != null ? `${settings.currency} ${Number(p.default_price).toFixed(2)}` : null,
+                                CHART_SCOPE_LABELS[p.default_scope],
+                              ]
                                 .filter(Boolean)
                                 .join(' · ') || '—'}
                             </p>
@@ -1307,6 +1311,7 @@ function ProcedureFields({
       description: form.get('description') || null,
       default_duration_minutes: duration ? Number(duration) : null,
       default_price: price ? Number(price) : null,
+      default_scope: form.get('default_scope') || 'whole_tooth',
       active: form.get('active') === 'on',
     })
   }
@@ -1324,6 +1329,16 @@ function ProcedureFields({
       </select>
       <input name="default_duration_minutes" type="number" min="0" defaultValue={procedure?.default_duration_minutes ?? ''} placeholder="Default duration (min)" className="rounded-lg border border-slate-300 px-3 py-2 text-sm" />
       <input name="default_price" type="number" step="0.01" min="0" defaultValue={procedure?.default_price ?? ''} placeholder={`Default price (${currency})`} className="rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+      <div>
+        <select name="default_scope" defaultValue={procedure?.default_scope ?? 'whole_tooth'} className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm">
+          {(Object.keys(CHART_SCOPE_LABELS) as ChartScope[]).map((s) => (
+            <option key={s} value={s}>
+              {CHART_SCOPE_LABELS[s]}
+            </option>
+          ))}
+        </select>
+        <p className="mt-0.5 text-[11px] text-slate-400">Area this procedure usually affects on the tooth chart — staff can still pick a different area for an unusual case.</p>
+      </div>
       <textarea name="description" defaultValue={procedure?.description ?? ''} placeholder="Description / clinical details" className="rounded-lg border border-slate-300 px-3 py-2 text-sm sm:col-span-2" />
       <label className="flex items-center gap-2 text-sm text-navy-800 sm:col-span-2">
         <input type="checkbox" name="active" defaultChecked={procedure?.active ?? true} />
