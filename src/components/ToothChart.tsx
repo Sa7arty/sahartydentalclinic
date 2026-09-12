@@ -660,19 +660,21 @@ export default function ToothChart({ patientId }: { patientId: string }) {
                       {d.condition_name} — {d.surfaces.length ? d.surfaces.join(', ') : 'whole tooth'}
                       {d.source === 'auto' && <span className="text-slate-400"> (auto)</span>}
                     </span>
-                    {d.active && (
-                      <span className="flex shrink-0 gap-2">
-                        <button onClick={() => openEditDiagnosis(d)} className="text-navy-700 hover:underline">
-                          Edit
-                        </button>
-                        <button onClick={() => handleResolveDiagnosis(d)} className="text-amber-600 hover:underline">
-                          Resolve
-                        </button>
-                        <button onClick={() => handleDeleteDiagnosis(d.id)} className="text-red-600 hover:underline">
-                          Delete
-                        </button>
-                      </span>
-                    )}
+                    <span className="flex shrink-0 gap-2">
+                      {d.active && (
+                        <>
+                          <button onClick={() => openEditDiagnosis(d)} className="text-navy-700 hover:underline">
+                            Edit
+                          </button>
+                          <button onClick={() => handleResolveDiagnosis(d)} className="text-amber-600 hover:underline">
+                            Resolve
+                          </button>
+                        </>
+                      )}
+                      <button onClick={() => handleDeleteDiagnosis(d.id)} className="text-red-600 hover:underline">
+                        Delete
+                      </button>
+                    </span>
                   </div>
                 ))}
               </div>
@@ -882,16 +884,16 @@ export default function ToothChart({ patientId }: { patientId: string }) {
                       {d.note ? ` · ${d.note}` : ''}
                     </p>
                   </div>
-                  {d.active && (
-                    <div className="flex shrink-0 items-center gap-3">
+                  <div className="flex shrink-0 items-center gap-3">
+                    {d.active && (
                       <button onClick={() => openEditDiagnosis(d)} className="text-xs font-medium text-navy-700 hover:underline">
                         Edit
                       </button>
-                      <button onClick={() => handleDeleteDiagnosis(d.id)} className="text-xs text-red-600 hover:underline">
-                        Delete
-                      </button>
-                    </div>
-                  )}
+                    )}
+                    <button onClick={() => handleDeleteDiagnosis(d.id)} className="text-xs text-red-600 hover:underline">
+                      Delete
+                    </button>
+                  </div>
                 </div>
               ))
           )
