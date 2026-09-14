@@ -1162,3 +1162,13 @@ create policy "staff can clock out for today" on public.employee_attendance for 
     work_date = (now() at time zone 'Africa/Cairo')::date
     and employee_id in (select id from public.employees where user_id = auth.uid())
   );
+
+-- Historical stock import from the owner's 2023-2026 Excel tracking sheets
+-- (2026-09-15): inventory_clusters gained an active flag so a since-retired
+-- storage location (e.g. old categories replaced in a Sep 2024 restructure)
+-- can still render for the past months it genuinely had data in, without
+-- cluttering the current/future view (mirrors how inventory_items.active
+-- already worked). The app resolves visibility per viewed month: an active
+-- row always shows; a retired one shows only if it has a real count/history
+-- entry for that exact period.
+alter table public.inventory_clusters add column if not exists active boolean not null default true;
