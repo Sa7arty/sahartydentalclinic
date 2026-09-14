@@ -105,30 +105,37 @@ export interface ProcedureCategory {
   active: boolean
 }
 
-export type ChartScope = 'surface' | 'multi_surface' | 'whole_tooth' | 'sextant' | 'arch' | 'whole_mouth'
+// "Treatment area" — how much of the mouth a procedure or diagnosis covers.
+// Surface now always allows picking one or more surfaces (no separate
+// "multiple surfaces" option — that distinction was folded into this one).
+export type ChartScope = 'tooth_range' | 'whole_tooth' | 'surface' | 'sextant' | 'quadrant' | 'whole_mouth' | 'arch'
 
 export const CHART_SCOPE_LABELS: Record<ChartScope, string> = {
-  surface: 'Single surface',
-  multi_surface: 'Multiple surfaces',
-  whole_tooth: 'Whole tooth',
+  tooth_range: 'Tooth range',
+  whole_tooth: 'Tooth',
+  surface: 'Surface',
   sextant: 'Sextant',
-  arch: 'Whole arch',
-  whole_mouth: 'Whole mouth',
+  quadrant: 'Quadrant',
+  whole_mouth: 'Mouth',
+  arch: 'Arch',
 }
 
 // Paint type = how a procedure or diagnosis condition redraws the tooth icon
 // itself (shape + color), instead of the plain per-surface color fill.
 // "filling" is the default — no shape change, just the usual surface color.
-export type PaintType = 'filling' | 'extraction' | 'endo' | 'post' | 'implant' | 'crown' | 'missing'
+export type PaintType = 'extraction' | 'implant' | 'endo' | 'post' | 'filling' | 'crown' | 'veneer' | 'missing' | 'denture' | 'caries'
 
 export const PAINT_TYPE_LABELS: Record<PaintType, string> = {
-  filling: 'Simple fill (default) — colors the surface(s) only',
   extraction: 'Extraction — pale tooth, greys out once completed',
-  endo: 'Root canal (endo) — root colored by status',
-  post: 'Post — root canal look plus a post marker',
   implant: 'Implant — replaces the tooth with a fixture icon',
+  endo: 'RCT — root canal, root colored by status',
+  post: 'Post — root canal look plus a post marker',
+  filling: 'Filling (default) — colors the surface(s) only',
   crown: 'Crown — the whole tooth capped in the status color',
+  veneer: 'Veneer — a translucent shell on the crown, root untouched',
   missing: 'Missing — solid grey silhouette',
+  denture: 'Denture — solid pink silhouette (replaced, not just absent)',
+  caries: 'Caries — the crown flagged in a warning color',
 }
 
 export interface Procedure {

@@ -27,15 +27,45 @@ export const ARCHES: { key: 'upper' | 'lower'; label: string; teeth: number[] }[
   { key: 'lower', label: 'Lower arch', teeth: LOWER_ROW },
 ]
 
-/** Turns a chosen scope + its selection (specific teeth/surfaces/sextant key/arch key) into the concrete tooth list to store. */
-export function expandScopeToTeeth(scope: ChartScope, selection: { teeth?: number[]; sextantKey?: string; archKey?: 'upper' | 'lower' }): number[] {
+// FDI's first digit IS the quadrant (1=upper right, 2=upper left, 3=lower left,
+// 4=lower right) — no separate lookup table needed, just group by it.
+export const QUADRANTS: { key: string; label: string; teeth: number[] }[] = [
+  { key: '1', label: 'Upper right (18–11)', teeth: UPPER_ROW.slice(0, 8) },
+  { key: '2', label: 'Upper left (21–28)', teeth: UPPER_ROW.slice(8, 16) },
+  { key: '3', label: 'Lower left (38–31)', teeth: LOWER_ROW.slice(8, 16).slice().reverse() },
+  { key: '4', label: 'Lower right (41–48)', teeth: LOWER_ROW.slice(0, 8).slice().reverse() },
+]
+
+/** Every tooth between two endpoints, inclusive, in anatomical (not raw FDI-number) order.
+ * Both teeth must sit in the same arch — a range can't cross the midline gap between
+ * arches. Falls back to just the two endpoints if they aren't in a shared row. */
+export function expandToothRange(a: number, b: number): number[] {
+  for (const row of [UPPER_ROW, LOWER_ROW]) {
+    const ia = row.indexOf(a)
+    const ib = row.indexOf(b)
+    if (ia !== -1 && ib !== -1) {
+      const [lo, hi] = ia <= ib ? [ia, ib] : [ib, ia]
+      return row.slice(lo, hi + 1)
+    }
+  }
+  return Array.from(new Set([a, b]))
+}
+
+/** Turns a chosen scope + its selection (specific teeth/surfaces/sextant/quadrant/arch key or tooth-range endpoints) into the concrete tooth list to store. */
+export function expandScopeToTeeth(
+  scope: ChartScope,
+  selection: { teeth?: number[]; sextantKey?: string; quadrantKey?: string; archKey?: 'upper' | 'lower'; rangeFrom?: number; rangeTo?: number },
+): number[] {
   switch (scope) {
     case 'surface':
-    case 'multi_surface':
     case 'whole_tooth':
       return selection.teeth ?? []
+    case 'tooth_range':
+      return selection.rangeFrom && selection.rangeTo ? expandToothRange(selection.rangeFrom, selection.rangeTo) : []
     case 'sextant':
       return SEXTANTS.find((s) => s.key === selection.sextantKey)?.teeth ?? []
+    case 'quadrant':
+      return QUADRANTS.find((q) => q.key === selection.quadrantKey)?.teeth ?? []
     case 'arch':
       return ARCHES.find((a) => a.key === selection.archKey)?.teeth ?? []
     case 'whole_mouth':
@@ -103,25 +133,33 @@ export const POST_MARKER_PATH = 'M18,9 L22,9 Q22.5,9 22.5,9.5 L22.5,49 Q22.5,51 
 
 // When a tooth has more than one special paint type charted on it at once (e.g.
 // a crown over a root-canal-treated tooth), the most visually "final" state wins
-// — implant replaces everything, crown caps what's underneath, etc. "filling"
-// never wins since it isn't a shape change at all.
-export const PAINT_PRIORITY: PaintType[] = ['implant', 'crown', 'post', 'endo', 'extraction', 'missing', 'filling']
+// — implant/denture replace everything, crown caps what's underneath, etc.
+// "filling" never wins since it isn't a shape change at all.
+export const PAINT_PRIORITY: PaintType[] = ['implant', 'denture', 'crown', 'post', 'endo', 'veneer', 'extraction', 'missing', 'caries', 'filling']
 
 // Fixed crown color for endo/post so "this tooth has root-canal work" reads at
 // a glance — the root (or, for post, the marker) carries the actual status color.
 export const ENDO_INDICATOR_COLOR = '#4fae87'
+export const CARIES_COLOR = '#92400e'
+export const DENTURE_COLOR = '#f4b6c2'
+export const NORMAL_ENAMEL_COLOR = '#f8f0dc'
 
 /** Human-readable description of what a chart entry covers, for lists/tooltips. */
 export function describeScope(scope: ChartScope, teeth: number[], surfaces: ToothSurface[]): string {
   switch (scope) {
     case 'surface':
-    case 'multi_surface':
       return `Tooth ${teeth[0] ?? '?'} — ${surfaces.join(', ')}`
     case 'whole_tooth':
       return teeth.length === 1 ? `Tooth ${teeth[0]}` : `Teeth ${teeth.join(', ')}`
+    case 'tooth_range':
+      return teeth.length > 0 ? `Teeth ${teeth[0]}–${teeth[teeth.length - 1]}` : 'Tooth range'
     case 'sextant': {
       const s = SEXTANTS.find((x) => x.teeth.length === teeth.length && x.teeth.every((t) => teeth.includes(t)))
       return s ? s.label : `Sextant (${teeth.join(', ')})`
+    }
+    case 'quadrant': {
+      const q = QUADRANTS.find((x) => x.teeth.length === teeth.length && x.teeth.every((t) => teeth.includes(t)))
+      return q ? q.label : `Quadrant (${teeth.length} teeth)`
     }
     case 'arch': {
       const a = ARCHES.find((x) => x.teeth.length === teeth.length && x.teeth.every((t) => teeth.includes(t)))

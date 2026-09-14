@@ -1071,3 +1071,21 @@ with check (
 create type public.paint_type as enum ('filling', 'extraction', 'endo', 'post', 'implant', 'crown', 'missing');
 alter table public.procedures add column if not exists paint_type public.paint_type not null default 'filling';
 alter table public.diagnosis_conditions add column if not exists paint_type public.paint_type not null default 'filling';
+
+-- Treatment area / paint type expansion (2026-09-14): "chart_scope" gained
+-- 'tooth_range' (a contiguous run of teeth, e.g. 14-24) and 'quadrant' (the
+-- 4-way FDI-first-digit grouping, distinct from the existing 6-way 'sextant').
+-- 'multi_surface' was folded into 'surface' — surface selection is now always
+-- multi-select, so the separate "several surfaces" scope was redundant; the 3
+-- diagnosis_conditions rows on 'multi_surface' (Decayed, Filled, Fractured)
+-- were moved to 'surface'. paint_type gained 'veneer', 'denture', and 'caries'
+-- to round out the full paint-type list the owner asked for; Decayed, Veneer,
+-- and Denture abutment were seeded accordingly. Multi-tooth diagnosis scopes
+-- (sextant/quadrant/arch/whole_mouth/tooth_range) are still stored as one
+-- tooth_diagnoses row per tooth — no schema change needed there, since the
+-- table already stores one tooth per row.
+alter type public.chart_scope add value if not exists 'tooth_range';
+alter type public.chart_scope add value if not exists 'quadrant';
+alter type public.paint_type add value if not exists 'veneer';
+alter type public.paint_type add value if not exists 'denture';
+alter type public.paint_type add value if not exists 'caries';

@@ -24,6 +24,7 @@ import {
   LOWER_ROW,
   ALL_TEETH,
   SEXTANTS,
+  QUADRANTS,
   ARCHES,
   expandScopeToTeeth,
   describeScope,
@@ -40,6 +41,9 @@ import {
   POST_MARKER_PATH,
   PAINT_PRIORITY,
   ENDO_INDICATOR_COLOR,
+  CARIES_COLOR,
+  DENTURE_COLOR,
+  NORMAL_ENAMEL_COLOR,
 } from '../lib/dentalChart'
 
 type Mode = 'diagnosis' | 'treatment'
@@ -214,12 +218,42 @@ function SpecialToothIcon({
         ))}
       </>
     )
+  } else if (paintType === 'denture') {
+    content = (
+      <>
+        <path d={crownPath} fill={DENTURE_COLOR} stroke="#c98aa0" strokeWidth={0.6} />
+        {rootPaths.map((p, i) => (
+          <path key={i} d={p} fill={DENTURE_COLOR} stroke="#c98aa0" strokeWidth={0.6} />
+        ))}
+      </>
+    )
   } else if (paintType === 'crown') {
     content = (
       <>
         <path d={crownPath} fill={statusColor} stroke="#00000030" strokeWidth={0.6} />
         {rootPaths.map((p, i) => (
           <path key={i} d={p} fill={statusColor} opacity={0.75} stroke="#00000030" strokeWidth={0.6} />
+        ))}
+      </>
+    )
+  } else if (paintType === 'veneer') {
+    // A thin colored shell on the crown only — the root is left looking like a normal tooth.
+    content = (
+      <>
+        <path d={crownPath} fill={NORMAL_ENAMEL_COLOR} stroke="#c2b280" strokeWidth={0.6} />
+        <path d={crownPath} fill={statusColor} opacity={0.45} />
+        {rootPaths.map((p, i) => (
+          <path key={i} d={p} fill={NORMAL_ENAMEL_COLOR} stroke="#cbb994" strokeWidth={0.6} />
+        ))}
+      </>
+    )
+  } else if (paintType === 'caries') {
+    // A warning-colored crown flags decay; the root is left looking normal.
+    content = (
+      <>
+        <path d={crownPath} fill={CARIES_COLOR} stroke="#00000030" strokeWidth={0.6} />
+        {rootPaths.map((p, i) => (
+          <path key={i} d={p} fill={NORMAL_ENAMEL_COLOR} stroke="#cbb994" strokeWidth={0.6} />
         ))}
       </>
     )
@@ -306,7 +340,7 @@ function buildStatusColors(entries: ToothProcedure[]): StatusColorMap {
   const map: StatusColorMap = {}
   for (const e of entries) {
     const color = CHART_STATUS_COLORS[e.status]
-    const surfaces = e.scope === 'surface' || e.scope === 'multi_surface' ? e.surfaces : ALL_SURFACES
+    const surfaces = e.scope === 'surface' ? e.surfaces : ALL_SURFACES
     for (const tooth of e.teeth) {
       const cur = map[tooth] ?? {}
       for (const s of surfaces) cur[s] = color
@@ -329,10 +363,17 @@ export default function ToothChart({ patientId }: { patientId: string }) {
   // ---- Diagnosis panel ----
   const [diagOpen, setDiagOpen] = useState(false)
   const [diagEditingId, setDiagEditingId] = useState<string | null>(null)
-  const [diagTooth, setDiagTooth] = useState<number | null>(null)
-  const [diagWholeTooth, setDiagWholeTooth] = useState(false)
-  const [diagSurfaces, setDiagSurfaces] = useState<Set<ToothSurface>>(new Set())
+  const [diagTooth, setDiagTooth] = useState<number | null>(null) // the tooth clicked to open the panel, if any — drives the "history on this tooth" convenience view
   const [diagConditionId, setDiagConditionId] = useState('')
+  const [diagScope, setDiagScope] = useState<ChartScope>('whole_tooth')
+  const [diagPickTeeth, setDiagPickTeeth] = useState<Set<number>>(new Set())
+  const [diagPickTooth, setDiagPickTooth] = useState<number | ''>('')
+  const [diagSurfaces, setDiagSurfaces] = useState<Set<ToothSurface>>(new Set())
+  const [diagSextantKey, setDiagSextantKey] = useState(SEXTANTS[0].key)
+  const [diagQuadrantKey, setDiagQuadrantKey] = useState(QUADRANTS[0].key)
+  const [diagArchKey, setDiagArchKey] = useState<'upper' | 'lower'>('upper')
+  const [diagRangeFrom, setDiagRangeFrom] = useState<number | ''>('')
+  const [diagRangeTo, setDiagRangeTo] = useState<number | ''>('')
   const [diagNote, setDiagNote] = useState('')
   const [diagSaving, setDiagSaving] = useState(false)
 
@@ -345,7 +386,10 @@ export default function ToothChart({ patientId }: { patientId: string }) {
   const [pickTooth, setPickTooth] = useState<number | ''>('')
   const [pickSurfaces, setPickSurfaces] = useState<Set<ToothSurface>>(new Set())
   const [sextantKey, setSextantKey] = useState(SEXTANTS[0].key)
+  const [quadrantKey, setQuadrantKey] = useState(QUADRANTS[0].key)
   const [archKey, setArchKey] = useState<'upper' | 'lower'>('upper')
+  const [rangeFrom, setRangeFrom] = useState<number | ''>('')
+  const [rangeTo, setRangeTo] = useState<number | ''>('')
   const [txStatus, setTxStatus] = useState<ChartStatus>('planned')
   const [txProviderId, setTxProviderId] = useState('')
   const [txNote, setTxNote] = useState('')
@@ -423,19 +467,23 @@ export default function ToothChart({ patientId }: { patientId: string }) {
     }
   }
 
-  function openDiagnosisPanel(tooth: number, surface?: ToothSurface) {
+  function openDiagnosisPanel(tooth?: number, surface?: ToothSurface) {
     setDiagEditingId(null)
-    setDiagTooth(tooth)
+    setDiagTooth(tooth ?? null)
     const first = conditions[0]
     setDiagConditionId(first?.id ?? '')
+    setDiagPickTeeth(tooth ? new Set([tooth]) : new Set())
+    setDiagPickTooth(tooth ?? '')
+    setDiagSextantKey(SEXTANTS[0].key)
+    setDiagQuadrantKey(QUADRANTS[0].key)
+    setDiagArchKey('upper')
+    setDiagRangeFrom('')
+    setDiagRangeTo('')
     if (surface) {
-      setDiagWholeTooth(false)
+      setDiagScope('surface')
       setDiagSurfaces(new Set([surface]))
-    } else if (first) {
-      setDiagWholeTooth(first.default_scope !== 'surface' && first.default_scope !== 'multi_surface')
-      setDiagSurfaces(new Set())
     } else {
-      setDiagWholeTooth(true)
+      setDiagScope(first && first.default_scope === 'surface' ? 'surface' : 'whole_tooth')
       setDiagSurfaces(new Set())
     }
     setDiagNote('')
@@ -444,12 +492,14 @@ export default function ToothChart({ patientId }: { patientId: string }) {
   function pickDiagCondition(id: string) {
     setDiagConditionId(id)
     const c = conditionById.get(id)
-    if (c && diagSurfaces.size === 0) setDiagWholeTooth(c.default_scope !== 'surface' && c.default_scope !== 'multi_surface')
+    if (c && diagSurfaces.size === 0) setDiagScope(c.default_scope)
   }
   function openEditDiagnosis(d: ToothDiagnosis) {
     setDiagEditingId(d.id)
     setDiagTooth(d.tooth)
-    setDiagWholeTooth(d.surfaces.length === 0)
+    setDiagScope(d.surfaces.length === 0 ? 'whole_tooth' : 'surface')
+    setDiagPickTeeth(new Set([d.tooth]))
+    setDiagPickTooth(d.tooth)
     setDiagSurfaces(new Set(d.surfaces))
     setDiagConditionId(d.condition_id ?? '')
     setDiagNote(d.note ?? '')
@@ -463,30 +513,72 @@ export default function ToothChart({ patientId }: { patientId: string }) {
       return next
     })
   }
+  function toggleDiagWholeTooth(n: number) {
+    setDiagPickTeeth((cur) => {
+      const next = new Set(cur)
+      if (next.has(n)) next.delete(n)
+      else next.add(n)
+      return next
+    })
+  }
   async function handleSaveDiagnosis() {
-    if (diagTooth === null) return
     if (!diagConditionId) return alert('Please choose a condition.')
-    if (!diagWholeTooth && diagSurfaces.size === 0) return alert('Pick at least one surface, or check "whole tooth".')
     const cond = conditionById.get(diagConditionId)
-    setDiagSaving(true)
-    await resolveOtherActiveMatches(diagTooth, diagConditionId, diagEditingId ?? undefined)
-    const payload = {
-      patient_id: patientId,
-      tooth: diagTooth,
-      surfaces: diagWholeTooth ? [] : Array.from(diagSurfaces),
-      condition_id: diagConditionId,
-      condition_name: cond?.name ?? diagnoses.find((d) => d.id === diagEditingId)?.condition_name ?? 'Other',
-      note: diagNote || null,
-      source: 'manual' as const,
-      updated_at: new Date().toISOString(),
-    }
-    const { error } = diagEditingId ? await supabase.from('tooth_diagnoses').update(payload).eq('id', diagEditingId) : await supabase.from('tooth_diagnoses').insert(payload)
-    setDiagSaving(false)
-    if (error) alert(error.message)
-    else {
+    const conditionName = cond?.name ?? diagnoses.find((d) => d.id === diagEditingId)?.condition_name ?? 'Other'
+
+    // Editing only ever touches one existing row (tooth/surfaces are locked after charting).
+    if (diagEditingId) {
+      setDiagSaving(true)
+      await resolveOtherActiveMatches(diagTooth as number, diagConditionId, diagEditingId)
+      const { error } = await supabase
+        .from('tooth_diagnoses')
+        .update({ condition_id: diagConditionId, condition_name: conditionName, note: diagNote || null, updated_at: new Date().toISOString() })
+        .eq('id', diagEditingId)
+      setDiagSaving(false)
+      if (error) return alert(error.message)
       setDiagOpen(false)
       load()
+      return
     }
+
+    let teeth: number[] = []
+    let surfaces: ToothSurface[] = []
+    if (diagScope === 'surface') {
+      if (!diagPickTooth) return alert('Please choose a tooth.')
+      if (diagSurfaces.size === 0) return alert('Please choose at least one surface.')
+      teeth = [diagPickTooth as number]
+      surfaces = Array.from(diagSurfaces)
+    } else if (diagScope === 'whole_tooth') {
+      if (diagPickTeeth.size === 0) return alert('Please choose at least one tooth.')
+      teeth = Array.from(diagPickTeeth)
+    } else if (diagScope === 'tooth_range') {
+      if (!diagRangeFrom || !diagRangeTo) return alert('Please choose both ends of the tooth range.')
+      teeth = expandScopeToTeeth(diagScope, { rangeFrom: diagRangeFrom as number, rangeTo: diagRangeTo as number })
+    } else {
+      teeth = expandScopeToTeeth(diagScope, { sextantKey: diagSextantKey, quadrantKey: diagQuadrantKey, archKey: diagArchKey })
+    }
+    if (teeth.length === 0) return alert('Please make a selection.')
+
+    setDiagSaving(true)
+    for (const tooth of teeth) {
+      await resolveOtherActiveMatches(tooth, diagConditionId)
+      const { error } = await supabase.from('tooth_diagnoses').insert({
+        patient_id: patientId,
+        tooth,
+        surfaces,
+        condition_id: diagConditionId,
+        condition_name: conditionName,
+        note: diagNote || null,
+        source: 'manual',
+      })
+      if (error) {
+        setDiagSaving(false)
+        return alert(error.message)
+      }
+    }
+    setDiagSaving(false)
+    setDiagOpen(false)
+    load()
   }
   async function handleResolveDiagnosis(d: ToothDiagnosis) {
     const { error } = await supabase.from('tooth_diagnoses').update({ active: false, updated_at: new Date().toISOString() }).eq('id', d.id)
@@ -509,7 +601,10 @@ export default function ToothChart({ patientId }: { patientId: string }) {
     setPickTooth(tooth ?? '')
     setPickSurfaces(surface ? new Set([surface]) : new Set())
     setSextantKey(SEXTANTS[0].key)
+    setQuadrantKey(QUADRANTS[0].key)
     setArchKey('upper')
+    setRangeFrom('')
+    setRangeTo('')
     setTxStatus('planned')
     setTxProviderId('')
     setTxNote('')
@@ -541,7 +636,6 @@ export default function ToothChart({ patientId }: { patientId: string }) {
   function toggleTxSurface(s: ToothSurface) {
     setPickSurfaces((cur) => {
       const next = new Set(cur)
-      if (scope === 'surface') return next.has(s) ? new Set() : new Set([s])
       if (next.has(s)) next.delete(s)
       else next.add(s)
       return next
@@ -565,7 +659,7 @@ export default function ToothChart({ patientId }: { patientId: string }) {
     const { data: already } = await supabase.from('tooth_diagnoses').select('id').eq('source_tooth_procedure_id', entryId).eq('active', true).limit(1)
     if (already && already.length > 0) return
 
-    const wholeTooth = scope !== 'surface' && scope !== 'multi_surface'
+    const wholeTooth = scope !== 'surface'
     for (const tooth of teeth) {
       // Superseded: any existing active diagnosis on this tooth that overlaps the treated surfaces is now out of date.
       const { data: existing } = await supabase.from('tooth_diagnoses').select('id, surfaces').eq('patient_id', patientId).eq('tooth', tooth).eq('active', true)
@@ -593,7 +687,7 @@ export default function ToothChart({ patientId }: { patientId: string }) {
     let teeth: number[] = existing?.teeth ?? []
     let surfaces: ToothSurface[] = existing?.surfaces ?? []
     if (!txEditingId) {
-      if (scope === 'surface' || scope === 'multi_surface') {
+      if (scope === 'surface') {
         if (!pickTooth) return alert('Please choose a tooth.')
         if (pickSurfaces.size === 0) return alert('Please choose at least one surface.')
         teeth = [pickTooth as number]
@@ -601,8 +695,11 @@ export default function ToothChart({ patientId }: { patientId: string }) {
       } else if (scope === 'whole_tooth') {
         if (pickTeeth.size === 0) return alert('Please choose at least one tooth.')
         teeth = Array.from(pickTeeth)
+      } else if (scope === 'tooth_range') {
+        if (!rangeFrom || !rangeTo) return alert('Please choose both ends of the tooth range.')
+        teeth = expandScopeToTeeth(scope, { rangeFrom: rangeFrom as number, rangeTo: rangeTo as number })
       } else {
-        teeth = expandScopeToTeeth(scope, { sextantKey, archKey })
+        teeth = expandScopeToTeeth(scope, { sextantKey, quadrantKey, archKey })
       }
     }
 
@@ -779,27 +876,10 @@ export default function ToothChart({ patientId }: { patientId: string }) {
       )}
 
       {/* ---------------- Diagnosis panel ---------------- */}
-      {diagOpen && diagTooth !== null && (
+      {diagOpen && (
         <div className="space-y-3 rounded-xl border border-slate-200 bg-white p-4">
-          <p className="font-medium text-navy-900">{diagEditingId ? 'Edit diagnosis' : 'New diagnosis'} — tooth {diagTooth}</p>
-          <label className="flex items-center gap-2 text-sm text-navy-800">
-            <input type="checkbox" checked={diagWholeTooth} onChange={(e) => setDiagWholeTooth(e.target.checked)} />
-            Whole tooth
-          </label>
-          {!diagWholeTooth && (
-            <div className="flex flex-wrap gap-1.5">
-              {ALL_SURFACES.map((s) => (
-                <button
-                  key={s}
-                  type="button"
-                  onClick={() => toggleDiagSurface(s)}
-                  className={`rounded-md border px-2 py-1 text-xs font-medium ${diagSurfaces.has(s) ? 'border-navy-900 bg-navy-900 text-white' : 'border-slate-300 text-slate-600 hover:bg-slate-50'}`}
-                >
-                  {SURFACE_LABELS[s]}
-                </button>
-              ))}
-            </div>
-          )}
+          <p className="font-medium text-navy-900">{diagEditingId ? 'Edit diagnosis' : 'New diagnosis'}</p>
+
           <select value={diagConditionId} onChange={(e) => pickDiagCondition(e.target.value)} className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm">
             <option value="">— Select a condition —</option>
             {conditions.map((c) => (
@@ -808,6 +888,145 @@ export default function ToothChart({ patientId }: { patientId: string }) {
               </option>
             ))}
           </select>
+
+          {!diagEditingId && (
+            <>
+              <div>
+                <label className="mb-1 block text-xs text-slate-500">Treatment area</label>
+                <select value={diagScope} onChange={(e) => setDiagScope(e.target.value as ChartScope)} className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm sm:max-w-xs">
+                  {(Object.keys(CHART_SCOPE_LABELS) as ChartScope[]).map((s) => (
+                    <option key={s} value={s}>
+                      {CHART_SCOPE_LABELS[s]}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {diagScope === 'surface' && (
+                <div className="space-y-2">
+                  <label className="mb-1 block text-xs text-slate-500">Tooth</label>
+                  <select
+                    value={diagPickTooth}
+                    onChange={(e) => {
+                      setDiagPickTooth(e.target.value ? Number(e.target.value) : '')
+                      setDiagSurfaces(new Set())
+                    }}
+                    className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm sm:max-w-xs"
+                  >
+                    <option value="">— Select a tooth —</option>
+                    {ALL_TEETH.map((n) => (
+                      <option key={n} value={n}>
+                        {n}
+                      </option>
+                    ))}
+                  </select>
+                  {diagPickTooth && (
+                    <div className="flex items-center gap-3">
+                      <ToothDiagram tooth={diagPickTooth as number} orientation="lower" surfaceColors={{}} selectable selectedSurfaces={diagSurfaces} onToggleSurface={toggleDiagSurface} scale={1.8} />
+                      <div className="text-xs text-slate-500">
+                        Click one or more surfaces.
+                        {diagSurfaces.size > 0 && <p className="mt-1 font-medium text-navy-800">{Array.from(diagSurfaces).map((s) => SURFACE_LABELS[s]).join(', ')}</p>}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {diagScope === 'whole_tooth' && (
+                <div>
+                  <label className="mb-1 block text-xs text-slate-500">Tooth (or teeth)</label>
+                  <div className="flex flex-wrap gap-1">
+                    {ALL_TEETH.map((n) => (
+                      <button
+                        key={n}
+                        type="button"
+                        onClick={() => toggleDiagWholeTooth(n)}
+                        className={`rounded-md border px-1.5 py-1 text-[11px] font-medium ${diagPickTeeth.has(n) ? 'border-navy-900 bg-navy-900 text-white' : 'border-slate-300 text-slate-600 hover:bg-slate-50'}`}
+                      >
+                        {n}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {diagScope === 'tooth_range' && (
+                <div className="flex flex-wrap items-end gap-2">
+                  <div>
+                    <label className="mb-1 block text-xs text-slate-500">From tooth</label>
+                    <select value={diagRangeFrom} onChange={(e) => setDiagRangeFrom(e.target.value ? Number(e.target.value) : '')} className="rounded-lg border border-slate-300 px-3 py-2 text-sm">
+                      <option value="">—</option>
+                      {ALL_TEETH.map((n) => (
+                        <option key={n} value={n}>
+                          {n}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-xs text-slate-500">To tooth</label>
+                    <select value={diagRangeTo} onChange={(e) => setDiagRangeTo(e.target.value ? Number(e.target.value) : '')} className="rounded-lg border border-slate-300 px-3 py-2 text-sm">
+                      <option value="">—</option>
+                      {ALL_TEETH.map((n) => (
+                        <option key={n} value={n}>
+                          {n}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+              )}
+
+              {diagScope === 'sextant' && (
+                <div>
+                  <label className="mb-1 block text-xs text-slate-500">Sextant</label>
+                  <select value={diagSextantKey} onChange={(e) => setDiagSextantKey(e.target.value)} className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm sm:max-w-xs">
+                    {SEXTANTS.map((s) => (
+                      <option key={s.key} value={s.key}>
+                        {s.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
+              {diagScope === 'quadrant' && (
+                <div>
+                  <label className="mb-1 block text-xs text-slate-500">Quadrant</label>
+                  <select value={diagQuadrantKey} onChange={(e) => setDiagQuadrantKey(e.target.value)} className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm sm:max-w-xs">
+                    {QUADRANTS.map((q) => (
+                      <option key={q.key} value={q.key}>
+                        {q.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
+              {diagScope === 'arch' && (
+                <div>
+                  <label className="mb-1 block text-xs text-slate-500">Arch</label>
+                  <select value={diagArchKey} onChange={(e) => setDiagArchKey(e.target.value as 'upper' | 'lower')} className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm sm:max-w-xs">
+                    {ARCHES.map((a) => (
+                      <option key={a.key} value={a.key}>
+                        {a.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
+              {diagScope === 'whole_mouth' && <p className="text-xs text-slate-500">Applies to the whole mouth — no further selection needed.</p>}
+            </>
+          )}
+
+          {diagEditingId && (
+            <p className="text-sm text-slate-600">
+              Tooth {diagTooth} — {diagnoses.find((d) => d.id === diagEditingId)?.surfaces.length ? Array.from(diagSurfaces).join(', ') : 'whole tooth'}
+              <span className="ml-2 text-xs text-slate-400">(tooth/surface selection is locked once charted — delete and re-add to change it)</span>
+            </p>
+          )}
+
           <textarea value={diagNote} onChange={(e) => setDiagNote(e.target.value)} placeholder="Note (optional)" className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
           <div className="flex gap-2">
             <button onClick={handleSaveDiagnosis} disabled={diagSaving} className="rounded-lg bg-navy-900 px-4 py-2 text-sm font-medium text-white hover:bg-navy-800 disabled:opacity-50">
@@ -818,39 +1037,41 @@ export default function ToothChart({ patientId }: { patientId: string }) {
             </button>
           </div>
 
-          <div className="border-t border-slate-100 pt-3">
-            <p className="mb-2 text-xs font-medium text-slate-500">History on this tooth</p>
-            {diagsForTooth(diagTooth).length === 0 ? (
-              <p className="text-xs text-slate-400">None yet.</p>
-            ) : (
-              <div className="space-y-1">
-                {diagsForTooth(diagTooth).map((d) => (
-                  <div key={d.id} className={`flex items-center justify-between gap-2 text-xs ${!d.active ? 'text-slate-400 line-through' : ''}`}>
-                    <span className="flex items-center gap-1.5">
-                      <span className="inline-block h-2.5 w-2.5 rounded-full border border-slate-300" style={{ backgroundColor: (d.condition_id && conditionColorById.get(d.condition_id)) || '#94a3b8' }} />
-                      {d.condition_name} — {d.surfaces.length ? d.surfaces.join(', ') : 'whole tooth'}
-                      {d.source === 'auto' && <span className="text-slate-400"> (auto)</span>}
-                    </span>
-                    <span className="flex shrink-0 gap-2">
-                      {d.active && (
-                        <>
-                          <button onClick={() => openEditDiagnosis(d)} className="text-navy-700 hover:underline">
-                            Edit
-                          </button>
-                          <button onClick={() => handleResolveDiagnosis(d)} className="text-amber-600 hover:underline">
-                            Resolve
-                          </button>
-                        </>
-                      )}
-                      <button onClick={() => handleDeleteDiagnosis(d.id)} className="text-red-600 hover:underline">
-                        Delete
-                      </button>
-                    </span>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
+          {diagTooth !== null && (
+            <div className="border-t border-slate-100 pt-3">
+              <p className="mb-2 text-xs font-medium text-slate-500">History on tooth {diagTooth}</p>
+              {diagsForTooth(diagTooth).length === 0 ? (
+                <p className="text-xs text-slate-400">None yet.</p>
+              ) : (
+                <div className="space-y-1">
+                  {diagsForTooth(diagTooth).map((d) => (
+                    <div key={d.id} className={`flex items-center justify-between gap-2 text-xs ${!d.active ? 'text-slate-400 line-through' : ''}`}>
+                      <span className="flex items-center gap-1.5">
+                        <span className="inline-block h-2.5 w-2.5 rounded-full border border-slate-300" style={{ backgroundColor: (d.condition_id && conditionColorById.get(d.condition_id)) || '#94a3b8' }} />
+                        {d.condition_name} — {d.surfaces.length ? d.surfaces.join(', ') : 'whole tooth'}
+                        {d.source === 'auto' && <span className="text-slate-400"> (auto)</span>}
+                      </span>
+                      <span className="flex shrink-0 gap-2">
+                        {d.active && (
+                          <>
+                            <button onClick={() => openEditDiagnosis(d)} className="text-navy-700 hover:underline">
+                              Edit
+                            </button>
+                            <button onClick={() => handleResolveDiagnosis(d)} className="text-amber-600 hover:underline">
+                              Resolve
+                            </button>
+                          </>
+                        )}
+                        <button onClick={() => handleDeleteDiagnosis(d.id)} className="text-red-600 hover:underline">
+                          Delete
+                        </button>
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
 
@@ -899,7 +1120,7 @@ export default function ToothChart({ patientId }: { patientId: string }) {
                 </div>
               )}
 
-              {procedureId && (scope === 'surface' || scope === 'multi_surface') && (
+              {procedureId && scope === 'surface' && (
                 <div className="space-y-2">
                   <label className="mb-1 block text-xs text-slate-500">Tooth</label>
                   <select
@@ -921,7 +1142,7 @@ export default function ToothChart({ patientId }: { patientId: string }) {
                     <div className="flex items-center gap-3">
                       <ToothDiagram tooth={pickTooth as number} orientation="lower" surfaceColors={{}} selectable selectedSurfaces={pickSurfaces} onToggleSurface={toggleTxSurface} scale={1.8} />
                       <div className="text-xs text-slate-500">
-                        {scope === 'surface' ? 'Click one surface.' : 'Click one or more surfaces.'}
+                        Click one or more surfaces.
                         {pickSurfaces.size > 0 && <p className="mt-1 font-medium text-navy-800">{Array.from(pickSurfaces).map((s) => SURFACE_LABELS[s]).join(', ')}</p>}
                       </div>
                     </div>
@@ -947,6 +1168,34 @@ export default function ToothChart({ patientId }: { patientId: string }) {
                 </div>
               )}
 
+              {procedureId && scope === 'tooth_range' && (
+                <div className="flex flex-wrap items-end gap-2">
+                  <div>
+                    <label className="mb-1 block text-xs text-slate-500">From tooth</label>
+                    <select value={rangeFrom} onChange={(e) => setRangeFrom(e.target.value ? Number(e.target.value) : '')} className="rounded-lg border border-slate-300 px-3 py-2 text-sm">
+                      <option value="">—</option>
+                      {ALL_TEETH.map((n) => (
+                        <option key={n} value={n}>
+                          {n}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-xs text-slate-500">To tooth</label>
+                    <select value={rangeTo} onChange={(e) => setRangeTo(e.target.value ? Number(e.target.value) : '')} className="rounded-lg border border-slate-300 px-3 py-2 text-sm">
+                      <option value="">—</option>
+                      {ALL_TEETH.map((n) => (
+                        <option key={n} value={n}>
+                          {n}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  {rangeFrom && rangeTo && <p className="text-xs text-slate-500">Both teeth must be in the same arch.</p>}
+                </div>
+              )}
+
               {procedureId && scope === 'sextant' && (
                 <div>
                   <label className="mb-1 block text-xs text-slate-500">Sextant</label>
@@ -954,6 +1203,19 @@ export default function ToothChart({ patientId }: { patientId: string }) {
                     {SEXTANTS.map((s) => (
                       <option key={s.key} value={s.key}>
                         {s.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
+              {procedureId && scope === 'quadrant' && (
+                <div>
+                  <label className="mb-1 block text-xs text-slate-500">Quadrant</label>
+                  <select value={quadrantKey} onChange={(e) => setQuadrantKey(e.target.value)} className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm sm:max-w-xs">
+                    {QUADRANTS.map((q) => (
+                      <option key={q.key} value={q.key}>
+                        {q.label}
                       </option>
                     ))}
                   </select>
@@ -1028,6 +1290,12 @@ export default function ToothChart({ patientId }: { patientId: string }) {
       {mode === 'treatment' && !txOpen && (
         <button onClick={() => openTreatmentPanel()} className="rounded-lg bg-gold-500 px-4 py-2 text-sm font-medium text-navy-950 hover:bg-gold-400">
           + Chart a procedure
+        </button>
+      )}
+
+      {mode === 'diagnosis' && !diagOpen && (
+        <button onClick={() => openDiagnosisPanel()} className="rounded-lg bg-gold-500 px-4 py-2 text-sm font-medium text-navy-950 hover:bg-gold-400">
+          + Log a finding
         </button>
       )}
 

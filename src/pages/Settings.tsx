@@ -10,14 +10,13 @@ import { exportPatientsCsv, downloadPatientImportTemplate, importPatientsFromCsv
 const DURATION_OPTIONS = [15, 20, 30, 45, 60, 75, 90, 120]
 const WEEKDAY_FULL_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
 
-type Category = 'patients' | 'calendar' | 'providers' | 'procedures' | 'diagnosis-conditions' | 'price-list' | 'financial' | 'team' | 'backup' | 'errors'
+type Category = 'patients' | 'calendar' | 'providers' | 'procedures' | 'price-list' | 'financial' | 'team' | 'backup' | 'errors'
 
 const CATEGORIES: { key: Category; label: string }[] = [
   { key: 'patients', label: 'Patients' },
   { key: 'calendar', label: 'Calendar & scheduling' },
   { key: 'providers', label: 'Providers' },
-  { key: 'procedures', label: 'Procedures' },
-  { key: 'diagnosis-conditions', label: 'Diagnosis conditions' },
+  { key: 'procedures', label: 'Procedures & conditions' },
   { key: 'price-list', label: 'Price list' },
   { key: 'financial', label: 'Financial' },
   { key: 'team', label: 'Team & access' },
@@ -25,7 +24,7 @@ const CATEGORIES: { key: Category; label: string }[] = [
   { key: 'errors', label: 'Error log' },
 ]
 
-const DIAGNOSIS_SCOPE_OPTIONS: ChartScope[] = ['surface', 'multi_surface', 'whole_tooth']
+const DIAGNOSIS_SCOPE_OPTIONS: ChartScope[] = Object.keys(CHART_SCOPE_LABELS) as ChartScope[]
 
 const TEAM_ROLES: { value: string; label: string }[] = [
   { value: 'receptionist', label: 'Receptionist' },
@@ -869,15 +868,12 @@ export default function Settings() {
               ))
             })()}
           </div>
-        </div>
-      )}
 
-      {category === 'diagnosis-conditions' && (
-        <div className={card}>
+          <div className={card}>
           <div className="flex items-center justify-between">
             <div>
               <h2 className="font-medium text-navy-900">Diagnosis conditions</h2>
-              <p className="text-sm text-slate-500">The findings staff can record in Diagnosis mode on the tooth chart — add your own, pick a color, and choose whether each usually covers a single surface, several surfaces, or the whole tooth.</p>
+              <p className="text-sm text-slate-500">The findings staff can record in Diagnosis mode on the tooth chart — add your own, pick a color, and choose the treatment area and paint type each usually applies with.</p>
             </div>
             <button
               onClick={() => {
@@ -922,6 +918,7 @@ export default function Settings() {
                 </div>
               ),
             )}
+          </div>
           </div>
         </div>
       )}
