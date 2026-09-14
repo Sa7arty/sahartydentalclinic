@@ -879,6 +879,44 @@ alter table public.inventory_counts enable row level security;
 create policy "staff manage counts" on public.inventory_counts for all
   using (auth.uid() is not null) with check (auth.uid() is not null);
 
+-- Inventory field history (2026-09-14): editing an item's name/brand/target or
+-- renaming a storage location must only affect the current and future months —
+-- past months should keep showing what was true at the time. Right before an
+-- edit is applied, the app snapshots the CURRENT (pre-edit) values here, tagged
+-- "valid_through" the last day of the month before the edit (an upsert with
+-- ignoreDuplicates, so a second edit within the same month doesn't overwrite
+-- the snapshot from the first one). Reading a past month resolves each field to
+-- the earliest snapshot whose valid_through still covers it, falling back to
+-- the live item/cluster row when no snapshot applies (current/future months,
+-- or nothing has changed since).
+create table public.inventory_item_history (
+  id uuid primary key default gen_random_uuid(),
+  item_id uuid not null references public.inventory_items(id) on delete cascade,
+  valid_through date not null,
+  name text not null,
+  brand text,
+  original_quantity numeric not null,
+  created_at timestamptz not null default now(),
+  unique (item_id, valid_through)
+);
+alter table public.inventory_item_history enable row level security;
+create policy "staff view item history" on public.inventory_item_history for select using (auth.uid() is not null);
+create policy "dentist manages item history" on public.inventory_item_history for all
+  using (public.has_role(auth.uid(), 'dentist')) with check (public.has_role(auth.uid(), 'dentist'));
+
+create table public.inventory_cluster_history (
+  id uuid primary key default gen_random_uuid(),
+  cluster_id uuid not null references public.inventory_clusters(id) on delete cascade,
+  valid_through date not null,
+  name text not null,
+  created_at timestamptz not null default now(),
+  unique (cluster_id, valid_through)
+);
+alter table public.inventory_cluster_history enable row level security;
+create policy "staff view cluster history" on public.inventory_cluster_history for select using (auth.uid() is not null);
+create policy "dentist manages cluster history" on public.inventory_cluster_history for all
+  using (public.has_role(auth.uid(), 'dentist')) with check (public.has_role(auth.uid(), 'dentist'));
+
 -- ============================================================
 -- After running this file:
 -- 1. Create your first staff user under Authentication > Users (invite by email).

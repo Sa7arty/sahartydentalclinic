@@ -1,7 +1,17 @@
 import { FormEvent, useEffect, useMemo, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../context/AuthContext'
-import { Inventory as InventoryType, InventoryCluster, InventoryItem, InventoryCount, needToBuy } from '../types'
+import {
+  Inventory as InventoryType,
+  InventoryCluster,
+  InventoryItem,
+  InventoryCount,
+  InventoryItemHistory,
+  InventoryClusterHistory,
+  needToBuy,
+  lastDayOfPreviousMonth,
+  resolveAsOfMonth,
+} from '../types'
 import { exportOrderSummaryPdf } from '../lib/pdf'
 
 type View = 'count' | 'order'
@@ -15,6 +25,8 @@ export default function Inventory() {
   const [clusters, setClusters] = useState<InventoryCluster[]>([])
   const [items, setItems] = useState<InventoryItem[]>([])
   const [counts, setCounts] = useState<Record<string, InventoryCount>>({})
+  const [itemHistory, setItemHistory] = useState<Record<string, InventoryItemHistory[]>>({})
+  const [clusterHistory, setClusterHistory] = useState<Record<string, InventoryClusterHistory[]>>({})
   const [month, setMonth] = useState(() => new Date().toISOString().slice(0, 7)) // yyyy-mm
   const [view, setView] = useState<View>('count')
   const [loading, setLoading] = useState(true)
@@ -24,6 +36,10 @@ export default function Inventory() {
 
   const period = `${month}-01`
   const monthLabel = `${MONTHS[Number(month.slice(5, 7)) - 1]} ${month.slice(0, 4)}`
+  // A closed month: past edits must not change what it shows, so its item/category
+  // management controls are read-only — editing always affects the live (current+future) data.
+  const isPastMonth = month < new Date().toISOString().slice(0, 7)
+  const canManage = isDentist && !isPastMonth
 
   useEffect(() => {
     supabase
@@ -52,11 +68,29 @@ export default function Inventory() {
     const { data: cl } = await supabase.from('inventory_clusters').select('*').eq('inventory_id', inventoryId).order('position')
     const clusterList = (cl as InventoryCluster[]) ?? []
     setClusters(clusterList)
+
     if (clusterList.length) {
+      const { data: ch } = await supabase.from('inventory_cluster_history').select('*').in('cluster_id', clusterList.map((c) => c.id))
+      const chMap: Record<string, InventoryClusterHistory[]> = {}
+      for (const h of (ch as InventoryClusterHistory[]) ?? []) (chMap[h.cluster_id] = chMap[h.cluster_id] ?? []).push(h)
+      setClusterHistory(chMap)
+
       const { data: it } = await supabase.from('inventory_items').select('*').in('cluster_id', clusterList.map((c) => c.id)).eq('active', true).order('position')
-      setItems((it as InventoryItem[]) ?? [])
+      const itemList = (it as InventoryItem[]) ?? []
+      setItems(itemList)
+
+      if (itemList.length) {
+        const { data: ih } = await supabase.from('inventory_item_history').select('*').in('item_id', itemList.map((i) => i.id))
+        const ihMap: Record<string, InventoryItemHistory[]> = {}
+        for (const h of (ih as InventoryItemHistory[]) ?? []) (ihMap[h.item_id] = ihMap[h.item_id] ?? []).push(h)
+        setItemHistory(ihMap)
+      } else {
+        setItemHistory({})
+      }
     } else {
       setItems([])
+      setClusterHistory({})
+      setItemHistory({})
     }
     setLoading(false)
   }
@@ -83,6 +117,25 @@ export default function Inventory() {
     if (error) alert(error.message)
   }
 
+  // Freezes an item's/cluster's CURRENT values as "what was true through last month" —
+  // called right before an edit is applied, so past months keep showing the old data
+  // while this edit only takes effect for the current and future months. A no-op if
+  // this month already has a snapshot (an earlier edit this same month already froze
+  // the right values — the ones from before ANY edit this month, not this one's).
+  async function snapshotItemHistory(item: InventoryItem) {
+    await supabase.from('inventory_item_history').upsert(
+      { item_id: item.id, valid_through: lastDayOfPreviousMonth(), name: item.name, brand: item.brand, original_quantity: item.original_quantity },
+      { onConflict: 'item_id,valid_through', ignoreDuplicates: true },
+    )
+  }
+
+  async function snapshotClusterHistory(cluster: InventoryCluster) {
+    await supabase.from('inventory_cluster_history').upsert(
+      { cluster_id: cluster.id, valid_through: lastDayOfPreviousMonth(), name: cluster.name },
+      { onConflict: 'cluster_id,valid_through', ignoreDuplicates: true },
+    )
+  }
+
   // ---- item management (dentist) ----
   async function handleAddItem(e: FormEvent<HTMLFormElement>, clusterId: string, position: number) {
     e.preventDefault()
@@ -105,10 +158,13 @@ export default function Inventory() {
   async function handleSaveItem(e: FormEvent<HTMLFormElement>, item: InventoryItem) {
     e.preventDefault()
     const f = new FormData(e.currentTarget)
-    const { error } = await supabase
-      .from('inventory_items')
-      .update({ name: f.get('name'), brand: (f.get('brand') as string) || null, original_quantity: Number(f.get('original_quantity')) || 0 })
-      .eq('id', item.id)
+    const name = f.get('name') as string
+    const brand = (f.get('brand') as string) || null
+    const original_quantity = Number(f.get('original_quantity')) || 0
+    if (name !== item.name || brand !== item.brand || original_quantity !== item.original_quantity) {
+      await snapshotItemHistory(item)
+    }
+    const { error } = await supabase.from('inventory_items').update({ name, brand, original_quantity }).eq('id', item.id)
     if (error) return alert(error.message)
     setEditingItemId(null)
     loadStructure()
@@ -160,8 +216,11 @@ export default function Inventory() {
   }
 
   async function handleRenameCluster(id: string, name: string) {
-    if (!name.trim()) return
-    await supabase.from('inventory_clusters').update({ name: name.trim() }).eq('id', id)
+    const trimmed = name.trim()
+    if (!trimmed) return
+    const cluster = clusters.find((c) => c.id === id)
+    if (cluster && cluster.name !== trimmed) await snapshotClusterHistory(cluster)
+    await supabase.from('inventory_clusters').update({ name: trimmed }).eq('id', id)
     loadStructure()
   }
 
@@ -189,16 +248,26 @@ export default function Inventory() {
     return map
   }, [items])
 
+  // What the item/cluster's editable fields were AS OF the selected month — the live
+  // values for the current or a future month, or a frozen snapshot for a past month
+  // that had an edit made after it closed. Editing always edits the live row; only
+  // display for a past month is affected.
+  const resolvedItem = (item: InventoryItem) =>
+    resolveAsOfMonth(itemHistory[item.id] ?? [], month, { name: item.name, brand: item.brand, original_quantity: item.original_quantity })
+  const resolvedClusterName = (cluster: InventoryCluster) => resolveAsOfMonth(clusterHistory[cluster.id] ?? [], month, { name: cluster.name }).name
+
   const orderLines = useMemo(() => {
     const lines: { cluster: string; name: string; brand: string; qty: number }[] = []
     for (const c of clusters) {
+      const clusterName = resolvedClusterName(c)
       for (const i of itemsByCluster[c.id] ?? []) {
-        const qty = needToBuy(i.original_quantity, counts[i.id]?.current_quantity ?? null)
-        if (qty > 0) lines.push({ cluster: c.name, name: i.name, brand: i.brand ?? '', qty })
+        const ri = resolvedItem(i)
+        const qty = needToBuy(ri.original_quantity, counts[i.id]?.current_quantity ?? null)
+        if (qty > 0) lines.push({ cluster: clusterName, name: ri.name, brand: ri.brand ?? '', qty })
       }
     }
     return lines
-  }, [clusters, itemsByCluster, counts])
+  }, [clusters, itemsByCluster, counts, itemHistory, clusterHistory, month])
 
   const totalToBuy = orderLines.reduce((s, l) => s + l.qty, 0)
   const inputCls = 'rounded-lg border border-slate-300 px-2 py-1 text-sm'
@@ -240,21 +309,22 @@ export default function Inventory() {
           <p className="text-xs text-slate-500">
             Counting for <span className="font-medium text-navy-800">{monthLabel}</span>. Enter what you currently have of each item; the app works out how many to buy.
             {' '}<span className="rounded bg-amber-50 px-1 text-amber-700">Amber rows</span> are below target (need restocking).
+            {isPastMonth && isDentist && <span className="ml-1 rounded bg-slate-100 px-1 text-slate-500">Past month — showing history as it was then; editing items or locations always applies from the current month on.</span>}
           </p>
 
           {clusters.map((cluster, ci) => (
             <div key={cluster.id} className="overflow-hidden rounded-xl border border-slate-200 bg-white">
               <div className="flex items-center justify-between gap-2 border-b border-slate-100 bg-slate-50 px-3 py-2">
-                {isDentist ? (
+                {canManage ? (
                   <input
                     defaultValue={cluster.name}
                     onBlur={(e) => e.target.value !== cluster.name && handleRenameCluster(cluster.id, e.target.value)}
                     className="w-full max-w-xs rounded-lg border border-transparent bg-transparent px-1 py-0.5 text-sm font-semibold text-navy-900 hover:border-slate-300 focus:border-slate-300 focus:bg-white"
                   />
                 ) : (
-                  <p className="text-sm font-semibold text-navy-900">{cluster.name}</p>
+                  <p className="text-sm font-semibold text-navy-900">{resolvedClusterName(cluster)}</p>
                 )}
-                {isDentist && (
+                {canManage && (
                   <div className="flex shrink-0 items-center gap-2 text-xs">
                     <button onClick={() => handleMoveCluster(cluster, -1)} disabled={ci === 0} className="rounded px-1 text-slate-500 hover:bg-slate-200 disabled:opacity-30">
                       ↑
@@ -281,14 +351,15 @@ export default function Inventory() {
                     <th className="px-3 py-1.5 text-center">Have now</th>
                     <th className="px-3 py-1.5 text-center">To buy</th>
                     <th className="px-3 py-1.5 text-center">Ordered</th>
-                    {isDentist && <th className="px-3 py-1.5"></th>}
+                    {canManage && <th className="px-3 py-1.5"></th>}
                   </tr>
                 </thead>
                 <tbody>
-                  {(itemsByCluster[cluster.id] ?? []).map((item, ii, arr) =>
-                    editingItemId === item.id ? (
+                  {(itemsByCluster[cluster.id] ?? []).map((item, ii, arr) => {
+                    const ri = resolvedItem(item)
+                    return editingItemId === item.id ? (
                       <tr key={item.id} className="border-t border-slate-100 bg-slate-50">
-                        <td colSpan={isDentist ? 7 : 6} className="px-3 py-2">
+                        <td colSpan={canManage ? 7 : 6} className="px-3 py-2">
                           <form onSubmit={(e) => handleSaveItem(e, item)} className="flex flex-wrap items-center gap-2">
                             <input name="name" defaultValue={item.name} placeholder="Item name" className={`${inputCls} flex-1`} />
                             <input name="brand" defaultValue={item.brand ?? ''} placeholder="Brand" className={inputCls} />
@@ -303,10 +374,10 @@ export default function Inventory() {
                         </td>
                       </tr>
                     ) : (
-                      <tr key={item.id} className={`border-t border-slate-100 ${needToBuy(item.original_quantity, counts[item.id]?.current_quantity ?? null) > 0 ? 'bg-amber-50' : ''}`}>
-                        <td className="px-3 py-1.5 text-navy-900">{item.name}</td>
-                        <td className="px-3 py-1.5 text-slate-500">{item.brand || '—'}</td>
-                        <td className="px-3 py-1.5 text-center text-slate-500">{Number(item.original_quantity)}</td>
+                      <tr key={item.id} className={`border-t border-slate-100 ${needToBuy(ri.original_quantity, counts[item.id]?.current_quantity ?? null) > 0 ? 'bg-amber-50' : ''}`}>
+                        <td className="px-3 py-1.5 text-navy-900">{ri.name}</td>
+                        <td className="px-3 py-1.5 text-slate-500">{ri.brand || '—'}</td>
+                        <td className="px-3 py-1.5 text-center text-slate-500">{Number(ri.original_quantity)}</td>
                         <td className="px-3 py-1.5 text-center">
                           <input
                             type="number"
@@ -322,14 +393,14 @@ export default function Inventory() {
                         </td>
                         <td className="px-3 py-1.5 text-center">
                           {(() => {
-                            const q = needToBuy(item.original_quantity, counts[item.id]?.current_quantity ?? null)
+                            const q = needToBuy(ri.original_quantity, counts[item.id]?.current_quantity ?? null)
                             return q > 0 ? <span className="font-semibold text-red-600">{q}</span> : <span className="text-slate-400">0</span>
                           })()}
                         </td>
                         <td className="px-3 py-1.5 text-center">
                           <input type="checkbox" checked={counts[item.id]?.ordered ?? false} onChange={(e) => saveCount(item.id, { ordered: e.target.checked })} />
                         </td>
-                        {isDentist && (
+                        {canManage && (
                           <td className="px-3 py-1.5 text-right whitespace-nowrap text-xs">
                             <button onClick={() => handleInsertAbove(item)} title="Insert a row above" className="mr-2 text-slate-500 hover:underline">
                               +↑
@@ -349,11 +420,11 @@ export default function Inventory() {
                           </td>
                         )}
                       </tr>
-                    ),
-                  )}
+                    )
+                  })}
                   {(itemsByCluster[cluster.id] ?? []).length === 0 && (
                     <tr className="border-t border-slate-100">
-                      <td colSpan={isDentist ? 7 : 6} className="px-3 py-2 text-xs text-slate-400">
+                      <td colSpan={canManage ? 7 : 6} className="px-3 py-2 text-xs text-slate-400">
                         No items in this location yet.
                       </td>
                     </tr>
@@ -361,7 +432,7 @@ export default function Inventory() {
                 </tbody>
               </table>
 
-              {isDentist && addingToCluster === cluster.id && (
+              {canManage && addingToCluster === cluster.id && (
                 <form onSubmit={(e) => handleAddItem(e, cluster.id, (itemsByCluster[cluster.id]?.reduce((m, i) => Math.max(m, i.position), 0) ?? 0) + 1)} className="flex flex-wrap items-center gap-2 border-t border-slate-100 bg-slate-50 px-3 py-2">
                   <input name="name" required placeholder="Item name" className={`${inputCls} flex-1`} />
                   <input name="brand" placeholder="Brand" className={inputCls} />
@@ -374,7 +445,7 @@ export default function Inventory() {
             </div>
           ))}
 
-          {isDentist &&
+          {canManage &&
             (showAddCluster ? (
               <form onSubmit={handleAddCluster} className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white p-3">
                 <input name="name" required placeholder="New storage location (e.g. Room 3 Cabinet)" className={`${inputCls} flex-1`} />

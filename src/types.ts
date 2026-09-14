@@ -1095,8 +1095,49 @@ export interface InventoryCount {
   ordered: boolean
 }
 
+/** A frozen snapshot of an item's editable fields, valid through the given date.
+ * Recorded right before an edit so past months keep showing what was true then. */
+export interface InventoryItemHistory {
+  id: string
+  item_id: string
+  valid_through: string
+  name: string
+  brand: string | null
+  original_quantity: number
+}
+
+/** Same idea as InventoryItemHistory, for a storage location's name. */
+export interface InventoryClusterHistory {
+  id: string
+  cluster_id: string
+  valid_through: string
+  name: string
+}
+
 /** How many to buy: the shortfall against the target start-of-month quantity. */
 export function needToBuy(originalQuantity: number, currentQuantity: number | null): number {
   if (currentQuantity == null) return 0
   return Math.max(0, Number(originalQuantity) - Number(currentQuantity))
+}
+
+/** Last calendar day of the month before today — the freeze point an edit's pre-change
+ * values snapshot to, so everything before it is protected and today's month is not. */
+export function lastDayOfPreviousMonth(): string {
+  const now = new Date()
+  return new Date(now.getFullYear(), now.getMonth(), 0).toISOString().slice(0, 10)
+}
+
+/** Last calendar day of a given "yyyy-mm" month string. */
+export function lastDayOfMonth(yyyyMm: string): string {
+  const [y, m] = yyyyMm.split('-').map(Number)
+  return new Date(y, m, 0).toISOString().slice(0, 10)
+}
+
+/** The value in effect at the end of `periodMonth` ("yyyy-mm"): the earliest history snapshot
+ * that still covers it, or the live current value if that month was never snapshotted (i.e. it's
+ * the current/a future month, or nothing has changed since). */
+export function resolveAsOfMonth<T>(history: (T & { valid_through: string })[], periodMonth: string, live: T): T {
+  const periodEnd = lastDayOfMonth(periodMonth)
+  const candidates = history.filter((h) => h.valid_through >= periodEnd).sort((a, b) => a.valid_through.localeCompare(b.valid_through))
+  return candidates[0] ?? live
 }
