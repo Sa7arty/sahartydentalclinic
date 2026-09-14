@@ -337,6 +337,15 @@ export default function Settings() {
     if (error) alert(error.message)
     else loadProcedureCategories()
   }
+  async function handleDeleteProcCategory(id: string) {
+    if (!confirm('Delete this category? Procedures in it keep their name and price, they just become uncategorized.')) return
+    const { error } = await supabase.from('procedure_categories').delete().eq('id', id)
+    if (error) alert(error.message)
+    else {
+      if (procFilter === id) setProcFilter('all')
+      loadProcedureCategories()
+    }
+  }
   async function handleSaveProcedure(payload: Record<string, unknown>, id?: string) {
     const { error } = id ? await supabase.from('procedures').update(payload).eq('id', id) : await supabase.from('procedures').insert(payload)
     if (error) {
@@ -760,8 +769,11 @@ export default function Settings() {
             </form>
             <div className="divide-y divide-slate-100">
               {procCategories.map((c) => (
-                <div key={c.id} className="py-2">
+                <div key={c.id} className="flex items-center gap-2 py-2">
                   <input defaultValue={c.name} onBlur={(e) => e.target.value !== c.name && handleRenameProcCategory(c.id, e.target.value)} className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+                  <button onClick={() => handleDeleteProcCategory(c.id)} className="shrink-0 text-sm text-red-600 hover:underline">
+                    Delete
+                  </button>
                 </div>
               ))}
             </div>

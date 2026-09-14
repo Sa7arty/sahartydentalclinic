@@ -774,7 +774,7 @@ export default function ToothChart({ patientId }: { patientId: string }) {
       <div className="flex items-center gap-1 rounded-lg border border-slate-300 bg-white p-1 text-sm">
         <button
           onClick={() => setMode('diagnosis')}
-          className={`rounded-md px-4 py-1.5 font-medium ${mode === 'diagnosis' ? 'bg-navy-900 text-white' : 'text-navy-700 hover:bg-slate-100'}`}
+          className={`flex-1 rounded-md px-4 py-2.5 text-base font-medium ${mode === 'diagnosis' ? 'bg-navy-900 text-white' : 'text-navy-700 hover:bg-slate-100'}`}
         >
           🩺 Diagnosis
         </button>
@@ -783,7 +783,7 @@ export default function ToothChart({ patientId }: { patientId: string }) {
             setArmedConditionId(null)
             setMode('treatment')
           }}
-          className={`rounded-md px-4 py-1.5 font-medium ${mode === 'treatment' ? 'bg-navy-900 text-white' : 'text-navy-700 hover:bg-slate-100'}`}
+          className={`flex-1 rounded-md px-4 py-2.5 text-base font-medium ${mode === 'treatment' ? 'bg-navy-900 text-white' : 'text-navy-700 hover:bg-slate-100'}`}
         >
           📋 Treatment plan
         </button>
