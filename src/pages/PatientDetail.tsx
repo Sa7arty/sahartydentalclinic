@@ -615,6 +615,7 @@ export default function PatientDetail() {
   ]
 
   const hasAlerts = allergies.length > 0 || conditions.length > 0 || patient.is_smoker
+  const missingFields = missingRequiredPatientFields(patient, settings.required_fields)
 
   return (
     <div className="space-y-6">
@@ -622,7 +623,7 @@ export default function PatientDetail() {
         <div>
           <h1 className="flex flex-wrap items-center gap-2 text-2xl font-semibold text-navy-900">
             {patientFullName(patient)}
-            <PatientBadges patient={patient} elderlyAgeThreshold={settings.elderly_age_threshold} hasCondition={conditions.length > 0} incompleteFields={missingRequiredPatientFields(patient, settings.required_fields)} />
+            <PatientBadges patient={patient} elderlyAgeThreshold={settings.elderly_age_threshold} hasCondition={conditions.length > 0} incompleteFields={missingFields} />
           </h1>
           <p className="text-sm text-slate-500">
             {patient.file_number && <>File #{patient.file_number} · </>}
@@ -653,6 +654,26 @@ export default function PatientDetail() {
           </div>
         )}
       </div>
+
+      {missingFields.length > 0 && (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-orange-300 bg-orange-50 px-4 py-3">
+          <div>
+            <p className="text-sm font-semibold text-orange-800">⚠ Incomplete file — missing info to ask the patient for</p>
+            <p className="mt-1 text-sm text-orange-700">{missingFields.join(', ')}</p>
+          </div>
+          {!editing && (
+            <button
+              onClick={() => {
+                setTab('info')
+                setEditing(true)
+              }}
+              className="shrink-0 rounded-lg border border-orange-400 bg-white px-3 py-1.5 text-sm font-medium text-orange-800 hover:bg-orange-100"
+            >
+              Fill in now
+            </button>
+          )}
+        </div>
+      )}
 
       {hasAlerts && (
         <div className="rounded-xl border border-red-300 bg-red-50 px-4 py-3">
