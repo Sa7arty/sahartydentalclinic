@@ -16,9 +16,31 @@ import {
   ProcedureCategory,
   Provider,
   providerFullName,
+  PaintType,
 } from '../types'
 import { formatDate } from '../lib/dates'
-import { UPPER_ROW, LOWER_ROW, ALL_TEETH, SEXTANTS, ARCHES, expandScopeToTeeth, describeScope, toothType, CROWN_W, CROWN_H, ROOT_H, CROWN_PATHS, ROOT_PATHS } from '../lib/dentalChart'
+import {
+  UPPER_ROW,
+  LOWER_ROW,
+  ALL_TEETH,
+  SEXTANTS,
+  ARCHES,
+  expandScopeToTeeth,
+  describeScope,
+  toothType,
+  CROWN_W,
+  CROWN_H,
+  ROOT_H,
+  CROWN_PATHS,
+  ROOT_PATHS,
+  IMPLANT_CAP_PATH,
+  IMPLANT_SHAFT_PATH,
+  IMPLANT_BASE_PATH,
+  IMPLANT_THREAD_YS,
+  POST_MARKER_PATH,
+  PAINT_PRIORITY,
+  ENDO_INDICATOR_COLOR,
+} from '../lib/dentalChart'
 
 type Mode = 'diagnosis' | 'treatment'
 
@@ -131,6 +153,139 @@ function ToothDiagram({
   )
 }
 
+const MISSING_COLOR = '#9ca3af'
+const EXTRACTION_COLOR = '#fde68a'
+
+// ---------------------------------------------------------------------------
+// A tooth whose current state calls for a completely different icon, not just
+// a surface color — extraction, root canal (endo), a post, an implant fixture,
+// a crown, or a missing tooth. Shape (and for extraction, whether it's shown
+// pending or already gone) is decided by paint type + status.
+// ---------------------------------------------------------------------------
+function SpecialToothIcon({
+  tooth,
+  orientation,
+  paintType,
+  status,
+  onClick,
+  scale = 0.62,
+}: {
+  tooth: number
+  orientation: 'upper' | 'lower'
+  paintType: PaintType
+  status: ChartStatus
+  onClick?: () => void
+  scale?: number
+}) {
+  const type = toothType(tooth)
+  const crownPath = CROWN_PATHS[type]
+  const rootPaths = ROOT_PATHS[type]
+  const totalH = CROWN_H + ROOT_H
+  const statusColor = CHART_STATUS_COLORS[status]
+  const isMissingLook = paintType === 'missing' || (paintType === 'extraction' && status === 'completed')
+
+  let content: JSX.Element
+  if (paintType === 'implant') {
+    content = (
+      <>
+        <path d={IMPLANT_BASE_PATH} fill="#f4f1ea" stroke="#c9c2ae" strokeWidth={0.6} />
+        <path d={IMPLANT_SHAFT_PATH} fill={statusColor} stroke="#00000030" strokeWidth={0.4} />
+        <path d={IMPLANT_CAP_PATH} fill={statusColor} stroke="#00000030" strokeWidth={0.4} />
+        {IMPLANT_THREAD_YS.map((y) => (
+          <line key={y} x1={15.5} y1={y} x2={24.5} y2={y} stroke="#00000035" strokeWidth={0.8} />
+        ))}
+      </>
+    )
+  } else if (isMissingLook) {
+    content = (
+      <>
+        <path d={crownPath} fill={MISSING_COLOR} stroke="#6b7280" strokeWidth={0.6} />
+        {rootPaths.map((p, i) => (
+          <path key={i} d={p} fill={MISSING_COLOR} stroke="#6b7280" strokeWidth={0.6} />
+        ))}
+      </>
+    )
+  } else if (paintType === 'extraction') {
+    content = (
+      <>
+        <path d={crownPath} fill={EXTRACTION_COLOR} stroke="#c9a63e" strokeWidth={0.6} />
+        {rootPaths.map((p, i) => (
+          <path key={i} d={p} fill={EXTRACTION_COLOR} stroke="#c9a63e" strokeWidth={0.6} />
+        ))}
+      </>
+    )
+  } else if (paintType === 'crown') {
+    content = (
+      <>
+        <path d={crownPath} fill={statusColor} stroke="#00000030" strokeWidth={0.6} />
+        {rootPaths.map((p, i) => (
+          <path key={i} d={p} fill={statusColor} opacity={0.75} stroke="#00000030" strokeWidth={0.6} />
+        ))}
+      </>
+    )
+  } else {
+    // endo or post: crown always signals "root-canal work here", root carries the status color.
+    content = (
+      <>
+        <path d={crownPath} fill={ENDO_INDICATOR_COLOR} stroke="#00000030" strokeWidth={0.6} />
+        {rootPaths.map((p, i) => (
+          <path key={i} d={p} fill={statusColor} stroke="#00000030" strokeWidth={0.6} />
+        ))}
+        {paintType === 'post' && <path d={POST_MARKER_PATH} fill="#ffffff" opacity={0.55} />}
+      </>
+    )
+  }
+
+  return (
+    <svg
+      width={CROWN_W * scale}
+      height={totalH * scale}
+      viewBox={`0 0 ${CROWN_W} ${totalH}`}
+      style={orientation === 'upper' ? { transform: 'scaleY(-1)' } : undefined}
+      onClick={onClick}
+      className={onClick ? 'cursor-pointer' : undefined}
+    >
+      {content}
+    </svg>
+  )
+}
+
+type ResolvedPaint = { paintType: PaintType; status: ChartStatus }
+
+/** What a tooth's overall icon should look like, blending diagnosis + treatment
+ * data. Highest-priority non-"filling" paint type wins (see PAINT_PRIORITY);
+ * returns null when nothing calls for anything but the plain surface-color view. */
+function resolveToothPaint(
+  tooth: number,
+  diagnoses: ToothDiagnosis[],
+  entries: ToothProcedure[],
+  conditionById: Map<string, DiagnosisConditionDef>,
+  procedureById: Map<string, Procedure>,
+): ResolvedPaint | null {
+  let best: ResolvedPaint | null = null
+  let bestRank = Infinity
+  const consider = (paintType: PaintType | undefined, status: ChartStatus) => {
+    if (!paintType || paintType === 'filling') return
+    const rank = PAINT_PRIORITY.indexOf(paintType)
+    if (rank <= bestRank) {
+      bestRank = rank
+      best = { paintType, status }
+    }
+  }
+  for (const d of diagnoses) {
+    if (!d.active || d.tooth !== tooth) continue
+    const cond = d.condition_id ? conditionById.get(d.condition_id) : undefined
+    // A diagnosis describes the current, already-true state — treat it like a completed treatment.
+    consider(cond?.paint_type, 'completed')
+  }
+  for (const e of entries) {
+    if (!e.teeth.includes(tooth)) continue
+    const proc = e.procedure_id ? procedureById.get(e.procedure_id) : undefined
+    consider(proc?.paint_type, e.status)
+  }
+  return best
+}
+
 type DiagColorMap = Record<number, Partial<Record<ToothSurface, string>>>
 
 function buildDiagnosisColors(diags: ToothDiagnosis[], colorById: Map<string, string>): DiagColorMap {
@@ -223,9 +378,11 @@ export default function ToothChart({ patientId }: { patientId: string }) {
 
   const conditionById = useMemo(() => new Map(conditions.map((c) => [c.id, c])), [conditions])
   const conditionColorById = useMemo(() => new Map(conditions.map((c) => [c.id, c.color])), [conditions])
+  const procedureById = useMemo(() => new Map(procedures.map((p) => [p.id, p])), [procedures])
   const diagnosisColors = useMemo(() => buildDiagnosisColors(diagnoses, conditionColorById), [diagnoses, conditionColorById])
   const statusColors = useMemo(() => buildStatusColors(entries), [entries])
   const surfaceColorsFor = (n: number) => (mode === 'diagnosis' ? diagnosisColors[n] ?? {} : statusColors[n] ?? {})
+  const paintFor = (n: number) => resolveToothPaint(n, diagnoses, entries, conditionById, procedureById)
 
   // ---------------- Diagnosis mode ----------------
   // "Armed" condition = fast bulk mode: press a condition below the chart, then
@@ -545,25 +702,39 @@ export default function ToothChart({ patientId }: { patientId: string }) {
             : ' — click a surface to chart a procedure, or the number for the whole tooth.'}
         </p>
         <div className="flex flex-wrap justify-center gap-2">
-          {UPPER_ROW.map((n) => (
-            <div key={n} className="flex flex-col items-center gap-0.5">
-              <ToothDiagram tooth={n} orientation="upper" surfaceColors={surfaceColorsFor(n)} selectable onToggleSurface={(s) => handleToothClick(n, s)} />
-              <button onClick={() => handleToothClick(n)} className="text-[10px] font-medium text-sky-600 hover:underline">
-                {n}
-              </button>
-            </div>
-          ))}
+          {UPPER_ROW.map((n) => {
+            const special = paintFor(n)
+            return (
+              <div key={n} className="flex flex-col items-center gap-0.5">
+                {special ? (
+                  <SpecialToothIcon tooth={n} orientation="upper" paintType={special.paintType} status={special.status} onClick={() => handleToothClick(n)} />
+                ) : (
+                  <ToothDiagram tooth={n} orientation="upper" surfaceColors={surfaceColorsFor(n)} selectable onToggleSurface={(s) => handleToothClick(n, s)} />
+                )}
+                <button onClick={() => handleToothClick(n)} className="text-[10px] font-medium text-sky-600 hover:underline">
+                  {n}
+                </button>
+              </div>
+            )
+          })}
         </div>
         <div className="my-4 border-t border-dashed border-slate-200" />
         <div className="flex flex-wrap justify-center gap-2">
-          {LOWER_ROW.map((n) => (
-            <div key={n} className="flex flex-col items-center gap-0.5">
-              <button onClick={() => handleToothClick(n)} className="text-[10px] font-medium text-sky-600 hover:underline">
-                {n}
-              </button>
-              <ToothDiagram tooth={n} orientation="lower" surfaceColors={surfaceColorsFor(n)} selectable onToggleSurface={(s) => handleToothClick(n, s)} />
-            </div>
-          ))}
+          {LOWER_ROW.map((n) => {
+            const special = paintFor(n)
+            return (
+              <div key={n} className="flex flex-col items-center gap-0.5">
+                <button onClick={() => handleToothClick(n)} className="text-[10px] font-medium text-sky-600 hover:underline">
+                  {n}
+                </button>
+                {special ? (
+                  <SpecialToothIcon tooth={n} orientation="lower" paintType={special.paintType} status={special.status} onClick={() => handleToothClick(n)} />
+                ) : (
+                  <ToothDiagram tooth={n} orientation="lower" surfaceColors={surfaceColorsFor(n)} selectable onToggleSurface={(s) => handleToothClick(n, s)} />
+                )}
+              </div>
+            )
+          })}
         </div>
         <p className="mt-3 text-center text-xs text-slate-500">Lower arch</p>
       </div>

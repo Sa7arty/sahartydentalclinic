@@ -2,7 +2,7 @@ import { ChangeEvent, FormEvent, useEffect, useRef, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../context/AuthContext'
 import { useSettings } from '../context/SettingsContext'
-import { Provider, PatientGroup, ProcedureCategory, Procedure, ExpenseCategory, ExpenseItem, providerFullName, REQUIRABLE_PATIENT_FIELDS, DENTAL_SPECIALTIES, ChartScope, CHART_SCOPE_LABELS, DiagnosisConditionDef } from '../types'
+import { Provider, PatientGroup, ProcedureCategory, Procedure, ExpenseCategory, ExpenseItem, providerFullName, REQUIRABLE_PATIENT_FIELDS, DENTAL_SPECIALTIES, ChartScope, CHART_SCOPE_LABELS, DiagnosisConditionDef, PaintType, PAINT_TYPE_LABELS } from '../types'
 import { WORLD_COUNTRIES } from '../data/countries'
 import { WEEKDAY_NAMES_FROM } from '../lib/dates'
 import { exportPatientsCsv, downloadPatientImportTemplate, importPatientsFromCsv } from '../lib/csv'
@@ -847,6 +847,7 @@ export default function Settings() {
                                 p.default_duration_minutes ? `${p.default_duration_minutes} min` : null,
                                 p.default_price != null ? `${settings.currency} ${Number(p.default_price).toFixed(2)}` : null,
                                 CHART_SCOPE_LABELS[p.default_scope],
+                                p.paint_type !== 'filling' ? PAINT_TYPE_LABELS[p.paint_type].split(' — ')[0] : null,
                               ]
                                 .filter(Boolean)
                                 .join(' · ') || '—'}
@@ -904,7 +905,10 @@ export default function Settings() {
                       <p className="font-medium text-navy-900">
                         {c.name} {!c.active && <span className="text-xs font-normal text-slate-400">· inactive</span>}
                       </p>
-                      <p className="text-xs text-slate-500">{CHART_SCOPE_LABELS[c.default_scope]}</p>
+                      <p className="text-xs text-slate-500">
+                        {CHART_SCOPE_LABELS[c.default_scope]}
+                        {c.paint_type !== 'filling' ? ` · ${PAINT_TYPE_LABELS[c.paint_type].split(' — ')[0]}` : ''}
+                      </p>
                     </div>
                   </div>
                   <div className="flex shrink-0 gap-3">
@@ -1398,6 +1402,7 @@ function ProcedureFields({
       default_price: price ? Number(price) : null,
       default_scope: form.get('default_scope') || 'whole_tooth',
       results_in_condition_id: form.get('results_in_condition_id') || null,
+      paint_type: form.get('paint_type') || 'filling',
       active: form.get('active') === 'on',
     })
   }
@@ -1436,6 +1441,17 @@ function ProcedureFields({
         </select>
         <p className="mt-0.5 text-[11px] text-slate-400">When completed, automatically set the diagnosis chart to this (e.g. Filling → Filled). Leave blank if this procedure shouldn't change it.</p>
       </div>
+      <div className="sm:col-span-2">
+        <label className="mb-1 block text-xs text-slate-500">Paint type</label>
+        <select name="paint_type" defaultValue={procedure?.paint_type ?? 'filling'} className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm">
+          {(Object.keys(PAINT_TYPE_LABELS) as PaintType[]).map((pt) => (
+            <option key={pt} value={pt}>
+              {PAINT_TYPE_LABELS[pt]}
+            </option>
+          ))}
+        </select>
+        <p className="mt-0.5 text-[11px] text-slate-400">How this procedure redraws the tooth on the chart — beyond simple filling, e.g. as an implant fixture or a capped crown, colored by planned/in progress/completed.</p>
+      </div>
       <textarea name="description" defaultValue={procedure?.description ?? ''} placeholder="Description / clinical details" className="rounded-lg border border-slate-300 px-3 py-2 text-sm sm:col-span-2" />
       <label className="flex items-center gap-2 text-sm text-navy-800 sm:col-span-2">
         <input type="checkbox" name="active" defaultChecked={procedure?.active ?? true} />
@@ -1469,6 +1485,7 @@ function ConditionFields({
       name: form.get('name'),
       color: form.get('color') || '#94a3b8',
       default_scope: form.get('default_scope') || 'whole_tooth',
+      paint_type: form.get('paint_type') || 'filling',
       active: form.get('active') === 'on',
     })
   }
@@ -1489,6 +1506,17 @@ function ConditionFields({
           ))}
         </select>
         <p className="mt-0.5 text-[11px] text-slate-400">Default only — staff can still pick a specific surface or the whole tooth per case.</p>
+      </div>
+      <div className="sm:col-span-2">
+        <label className="mb-1 block text-xs text-slate-500">Paint type</label>
+        <select name="paint_type" defaultValue={condition?.paint_type ?? 'filling'} className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm">
+          {(Object.keys(PAINT_TYPE_LABELS) as PaintType[]).map((pt) => (
+            <option key={pt} value={pt}>
+              {PAINT_TYPE_LABELS[pt]}
+            </option>
+          ))}
+        </select>
+        <p className="mt-0.5 text-[11px] text-slate-400">How this finding redraws the tooth — e.g. "Missing" as a grey silhouette instead of a colored fill.</p>
       </div>
       <label className="flex items-center gap-2 text-sm text-navy-800 sm:col-span-2">
         <input type="checkbox" name="active" defaultChecked={condition?.active ?? true} />

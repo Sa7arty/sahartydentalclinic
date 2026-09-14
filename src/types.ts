@@ -116,6 +116,21 @@ export const CHART_SCOPE_LABELS: Record<ChartScope, string> = {
   whole_mouth: 'Whole mouth',
 }
 
+// Paint type = how a procedure or diagnosis condition redraws the tooth icon
+// itself (shape + color), instead of the plain per-surface color fill.
+// "filling" is the default — no shape change, just the usual surface color.
+export type PaintType = 'filling' | 'extraction' | 'endo' | 'post' | 'implant' | 'crown' | 'missing'
+
+export const PAINT_TYPE_LABELS: Record<PaintType, string> = {
+  filling: 'Simple fill (default) — colors the surface(s) only',
+  extraction: 'Extraction — pale tooth, greys out once completed',
+  endo: 'Root canal (endo) — root colored by status',
+  post: 'Post — root canal look plus a post marker',
+  implant: 'Implant — replaces the tooth with a fixture icon',
+  crown: 'Crown — the whole tooth capped in the status color',
+  missing: 'Missing — solid grey silhouette',
+}
+
 export interface Procedure {
   id: string
   category_id: string | null
@@ -127,6 +142,7 @@ export interface Procedure {
   default_price: number | null
   default_scope: ChartScope
   results_in_condition_id: string | null
+  paint_type: PaintType
   active: boolean
 }
 
@@ -551,6 +567,7 @@ export interface DiagnosisConditionDef {
   name: string
   color: string
   default_scope: ChartScope
+  paint_type: PaintType
   active: boolean
   created_at: string
 }

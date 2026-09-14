@@ -1,4 +1,4 @@
-import { ChartScope, ToothSurface } from '../types'
+import { ChartScope, ToothSurface, PaintType } from '../types'
 
 // FDI two-digit notation, arranged left-to-right as viewed on a chart (patient's right on the left).
 export const UPPER_ROW = [18, 17, 16, 15, 14, 13, 12, 11, 21, 22, 23, 24, 25, 26, 27, 28]
@@ -73,14 +73,43 @@ export const CROWN_PATHS: Record<ToothType, string> = {
   molar: 'M8,10 Q8,3 14,3 Q17,6 19,4 Q21,3 23,4 Q25,6 26,3 Q32,3 32,10 L32,28 Q31,34 25,34 L15,34 Q9,34 8,28 Z',
 }
 
-// Roots are purely decorative (not clickable) — one tapered root for most teeth,
-// two for molars, drawn below the crown in the same 0–40 wide box.
+// Roots are purely decorative (not clickable) — a single rounded bulb for most
+// teeth, two narrower ones for molars, drawn below the crown in the same
+// 0–40 wide box. Bulbous rather than sharply tapered, closer to how a real
+// dental chart draws them.
 export const ROOT_PATHS: Record<ToothType, string[]> = {
-  incisor: ['M16,34 L24,34 L21,56 Q20,60 19,56 Z'],
-  canine: ['M15,34 L25,34 L21,58 Q20,61 19,58 Z'],
-  premolar: ['M14,34 L26,34 L21,56 Q20,60 19,56 Z'],
-  molar: ['M9,34 L18,34 L16,54 Q14,58 13,54 Z', 'M22,34 L31,34 L29,54 Q27,58 26,54 Z'],
+  incisor: ['M15,34 Q15,45 17,51 Q19,58 20,58 Q21,58 23,51 Q25,45 25,34 Z'],
+  canine: ['M14,34 Q14,46 16.5,53 Q19,60 20,60 Q21,60 23.5,53 Q26,46 26,34 Z'],
+  premolar: ['M14.5,34 Q14.5,45 16.5,51 Q18.5,58 20,58 Q21.5,58 23.5,51 Q25.5,45 25.5,34 Z'],
+  molar: [
+    'M9,34 Q9,42 10.5,47 Q12,53 13.5,53 Q15,53 16,47 Q17,42 17,34 Z',
+    'M23,34 Q23,42 24,47 Q25.5,53 27,53 Q28.5,53 29.5,47 Q31,42 31,34 Z',
+  ],
 }
+
+// ---------------------------------------------------------------------------
+// Implant icon: a threaded fixture in a rounded socket, replacing the natural
+// crown+root silhouette entirely. Same 40-wide, 58-tall box as a normal tooth.
+// ---------------------------------------------------------------------------
+export const IMPLANT_CAP_PATH = 'M17,2 L23,2 L23,8 L17,8 Z'
+export const IMPLANT_SHAFT_PATH = 'M15,8 Q15,7 16,7 L24,7 Q25,7 25,8 L25,31 Q25,32 24,32 L16,32 Q15,32 15,31 Z'
+export const IMPLANT_THREAD_YS = [11, 15, 19, 23, 27]
+export const IMPLANT_BASE_PATH = 'M11,32 Q11,41 13,47 Q15,56 20,57 Q25,56 27,47 Q29,41 29,32 Z'
+
+// Post marker: a light vertical rod overlaid on a tooth to signal a post/core
+// build-up inside the root canal. Purely decorative, drawn on top of the crown+
+// root fill.
+export const POST_MARKER_PATH = 'M18,9 L22,9 Q22.5,9 22.5,9.5 L22.5,49 Q22.5,51 20,51 Q17.5,51 17.5,49 L17.5,9.5 Q17.5,9 18,9 Z'
+
+// When a tooth has more than one special paint type charted on it at once (e.g.
+// a crown over a root-canal-treated tooth), the most visually "final" state wins
+// — implant replaces everything, crown caps what's underneath, etc. "filling"
+// never wins since it isn't a shape change at all.
+export const PAINT_PRIORITY: PaintType[] = ['implant', 'crown', 'post', 'endo', 'extraction', 'missing', 'filling']
+
+// Fixed crown color for endo/post so "this tooth has root-canal work" reads at
+// a glance — the root (or, for post, the marker) carries the actual status color.
+export const ENDO_INDICATOR_COLOR = '#4fae87'
 
 /** Human-readable description of what a chart entry covers, for lists/tooltips. */
 export function describeScope(scope: ChartScope, teeth: number[], surfaces: ToothSurface[]): string {
