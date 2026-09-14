@@ -1062,3 +1062,12 @@ with check (
 );
 -- A tooth should carry at most one ACTIVE finding per condition (app-enforced:
 -- writes resolve any other active match on the same tooth+condition first).
+
+-- Paint type (2026-09-14): how a procedure or diagnosis condition redraws the
+-- tooth icon (shape, not just surface color) on the chart — e.g. a missing
+-- tooth as a grey silhouette, an implant as a fixture icon, a root canal as a
+-- status-colored root under a fixed "endo" crown color. "filling" is the
+-- default (no shape change — the existing per-surface color fill).
+create type public.paint_type as enum ('filling', 'extraction', 'endo', 'post', 'implant', 'crown', 'missing');
+alter table public.procedures add column if not exists paint_type public.paint_type not null default 'filling';
+alter table public.diagnosis_conditions add column if not exists paint_type public.paint_type not null default 'filling';
