@@ -1127,3 +1127,38 @@ alter type public.chart_scope add value if not exists 'quadrant';
 alter type public.paint_type add value if not exists 'veneer';
 alter type public.paint_type add value if not exists 'denture';
 alter type public.paint_type add value if not exists 'caries';
+
+-- Digital clock in/out (2026-09-15): app_settings gains the clinic's exact
+-- coordinates and an allowed radius, so the Dashboard's Sign In/Sign Out
+-- buttons can be geofenced. Also documenting employees.user_id here since
+-- this file's "known drift" note above already flagged it as missing —
+-- it's a plain nullable uuid column (populated by the admin-create-user
+-- edge function when a login is created for an employee via HR), and it
+-- already had an FK to auth.users(id) live (added outside this file at
+-- some earlier point; restated here for a from-scratch install).
+alter table public.employees add column if not exists user_id uuid references auth.users(id) on delete set null;
+
+alter table public.app_settings add column if not exists clinic_latitude double precision;
+alter table public.app_settings add column if not exists clinic_longitude double precision;
+alter table public.app_settings add column if not exists attendance_radius_meters integer not null default 100;
+
+-- Staff can view their own attendance history, and clock themselves in/out
+-- for TODAY only (work_date must equal the current date in the clinic's own
+-- timezone — never a past or future date, never another employee's row).
+-- Additive to the existing "dentist manages attendance" policy above.
+create policy "staff can view own attendance" on public.employee_attendance for select
+  using (employee_id in (select id from public.employees where user_id = auth.uid()));
+create policy "staff can clock in for today" on public.employee_attendance for insert
+  with check (
+    work_date = (now() at time zone 'Africa/Cairo')::date
+    and employee_id in (select id from public.employees where user_id = auth.uid())
+  );
+create policy "staff can clock out for today" on public.employee_attendance for update
+  using (
+    work_date = (now() at time zone 'Africa/Cairo')::date
+    and employee_id in (select id from public.employees where user_id = auth.uid())
+  )
+  with check (
+    work_date = (now() at time zone 'Africa/Cairo')::date
+    and employee_id in (select id from public.employees where user_id = auth.uid())
+  );

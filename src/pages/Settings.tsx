@@ -10,7 +10,7 @@ import { exportPatientsCsv, downloadPatientImportTemplate, importPatientsFromCsv
 const DURATION_OPTIONS = [15, 20, 30, 45, 60, 75, 90, 120]
 const WEEKDAY_FULL_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
 
-type Category = 'patients' | 'calendar' | 'providers' | 'procedures' | 'price-list' | 'financial' | 'team' | 'backup' | 'errors'
+type Category = 'patients' | 'calendar' | 'providers' | 'procedures' | 'price-list' | 'financial' | 'attendance' | 'team' | 'backup' | 'errors'
 
 const CATEGORIES: { key: Category; label: string }[] = [
   { key: 'patients', label: 'Patients' },
@@ -19,6 +19,7 @@ const CATEGORIES: { key: Category; label: string }[] = [
   { key: 'procedures', label: 'Procedures & conditions' },
   { key: 'price-list', label: 'Price list' },
   { key: 'financial', label: 'Financial' },
+  { key: 'attendance', label: 'Attendance' },
   { key: 'team', label: 'Team & access' },
   { key: 'backup', label: 'Backup & import' },
   { key: 'errors', label: 'Error log' },
@@ -107,6 +108,12 @@ export default function Settings() {
   const [bigDebtThreshold, setBigDebtThreshold] = useState(settings.big_debt_threshold)
   const [savingFinancial, setSavingFinancial] = useState(false)
 
+  const [clinicLat, setClinicLat] = useState(settings.clinic_latitude)
+  const [clinicLng, setClinicLng] = useState(settings.clinic_longitude)
+  const [attendanceRadius, setAttendanceRadius] = useState(settings.attendance_radius_meters)
+  const [locating, setLocating] = useState(false)
+  const [savingAttendance, setSavingAttendance] = useState(false)
+
   const [importing, setImporting] = useState(false)
   const [importSummary, setImportSummary] = useState<string | null>(null)
 
@@ -132,6 +139,9 @@ export default function Settings() {
     setWeeklyOffDay(settings.weekly_off_day)
     setLateGraceMinutes(settings.late_grace_minutes)
     setBigDebtThreshold(settings.big_debt_threshold)
+    setClinicLat(settings.clinic_latitude)
+    setClinicLng(settings.clinic_longitude)
+    setAttendanceRadius(settings.attendance_radius_meters)
   }, [settings])
 
   useEffect(() => {
@@ -410,6 +420,33 @@ export default function Settings() {
       })
       .eq('id', true)
     setSavingFinancial(false)
+    if (error) alert(error.message)
+    else await refresh()
+  }
+  function handleUseMyLocation() {
+    if (!navigator.geolocation) return alert("Your browser doesn't support location.")
+    setLocating(true)
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        setClinicLat(pos.coords.latitude)
+        setClinicLng(pos.coords.longitude)
+        setLocating(false)
+      },
+      (err) => {
+        setLocating(false)
+        alert(err.code === 1 ? 'Location access was denied — allow it for this site in your browser settings and try again.' : "Couldn't get your location. Please try again.")
+      },
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 },
+    )
+  }
+  async function handleSaveAttendance(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault()
+    setSavingAttendance(true)
+    const { error } = await supabase
+      .from('app_settings')
+      .update({ clinic_latitude: clinicLat, clinic_longitude: clinicLng, attendance_radius_meters: attendanceRadius })
+      .eq('id', true)
+    setSavingAttendance(false)
     if (error) alert(error.message)
     else await refresh()
   }
@@ -1073,6 +1110,64 @@ export default function Settings() {
 
           <button type="submit" disabled={savingFinancial} className="rounded-lg bg-navy-900 px-4 py-2 text-sm font-medium text-white hover:bg-navy-800 disabled:opacity-50">
             {savingFinancial ? 'Saving…' : 'Save'}
+          </button>
+        </form>
+      )}
+
+      {category === 'attendance' && (
+        <form onSubmit={handleSaveAttendance} className={card}>
+          <div>
+            <h2 className="font-medium text-navy-900">Digital sign in / sign out</h2>
+            <p className="text-sm text-slate-500">
+              Staff with a login (see Team &amp; access, or "Create a login" on an employee under HR) get Sign In / Sign Out buttons on their Dashboard. They can only be used from within the radius
+              below of the clinic's exact coordinates — the browser asks the staff member to share their location the first time they try.
+            </p>
+          </div>
+
+          <div className="grid gap-4 sm:grid-cols-3">
+            <div>
+              <label className="mb-1 block text-sm text-slate-500">Clinic latitude</label>
+              <input
+                type="number"
+                step="any"
+                value={clinicLat ?? ''}
+                onChange={(e) => setClinicLat(e.target.value === '' ? null : Number(e.target.value))}
+                placeholder="e.g. 31.2001"
+                className="w-full rounded-lg border border-slate-300 px-3 py-2"
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-sm text-slate-500">Clinic longitude</label>
+              <input
+                type="number"
+                step="any"
+                value={clinicLng ?? ''}
+                onChange={(e) => setClinicLng(e.target.value === '' ? null : Number(e.target.value))}
+                placeholder="e.g. 29.9187"
+                className="w-full rounded-lg border border-slate-300 px-3 py-2"
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-sm text-slate-500">Allowed radius (meters)</label>
+              <input type="number" min="10" step="10" value={attendanceRadius} onChange={(e) => setAttendanceRadius(Number(e.target.value))} className="w-full rounded-lg border border-slate-300 px-3 py-2" />
+              <p className="mt-0.5 text-[11px] text-slate-400">Phone GPS drifts indoors — 100m is a safe default.</p>
+            </div>
+          </div>
+
+          <div>
+            <button
+              type="button"
+              onClick={handleUseMyLocation}
+              disabled={locating}
+              className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-navy-800 hover:bg-slate-50 disabled:opacity-50"
+            >
+              {locating ? 'Getting your location…' : '📍 Use my current location'}
+            </button>
+            <p className="mt-1 text-[11px] text-slate-400">Stand inside the clinic and tap this to fill in the coordinates precisely, instead of typing them.</p>
+          </div>
+
+          <button type="submit" disabled={savingAttendance} className="rounded-lg bg-navy-900 px-4 py-2 text-sm font-medium text-white hover:bg-navy-800 disabled:opacity-50">
+            {savingAttendance ? 'Saving…' : 'Save'}
           </button>
         </form>
       )}

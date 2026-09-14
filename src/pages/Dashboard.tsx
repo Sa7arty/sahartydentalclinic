@@ -2,7 +2,23 @@ import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { useSettings } from '../context/SettingsContext'
-import { Visit, Patient, Location, Provider, patientFullName, providerFullName, telHref, whatsappHref, visitRowClass, visitTextClass } from '../types'
+import { useAuth } from '../context/AuthContext'
+import {
+  Visit,
+  Patient,
+  Location,
+  Provider,
+  Employee,
+  EmployeeAttendance,
+  patientFullName,
+  providerFullName,
+  telHref,
+  whatsappHref,
+  visitRowClass,
+  visitTextClass,
+  distanceMeters,
+  attendanceHours,
+} from '../types'
 import { exportDailyHuddleSheetPdf } from '../lib/pdf'
 import { toYmd, fromYmd, startOfWeek, dayStart, dayEnd } from '../lib/dates'
 
@@ -40,6 +56,148 @@ async function fetchAllRows<T>(buildQuery: () => any): Promise<T[]> {
     if (chunk.length < step) break
   }
   return all
+}
+
+function nowTimeString() {
+  const d = new Date()
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:${String(d.getSeconds()).padStart(2, '0')}`
+}
+
+function fmtTime(t: string | null) {
+  return t ? t.slice(0, 5) : ''
+}
+
+/** Wraps the browser's geolocation callback API in a promise. */
+function getPosition(): Promise<GeolocationPosition> {
+  return new Promise((resolve, reject) => {
+    if (!navigator.geolocation) return reject(new Error('geolocation-unsupported'))
+    navigator.geolocation.getCurrentPosition(resolve, reject, { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 })
+  })
+}
+
+/** Sign In / Sign Out clock widget — only shows for the logged-in user's own linked employee record. */
+function ClockWidget() {
+  const { session } = useAuth()
+  const { settings } = useSettings()
+  const [employee, setEmployee] = useState<Employee | null | undefined>(undefined) // undefined = still loading
+  const [todayRow, setTodayRow] = useState<EmployeeAttendance | null>(null)
+  const [working, setWorking] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (session) load()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session])
+
+  async function load() {
+    const { data: emp } = await supabase.from('employees').select('*').eq('user_id', session!.user.id).maybeSingle()
+    setEmployee((emp as Employee) ?? null)
+    if (emp) {
+      const { data: row } = await supabase
+        .from('employee_attendance')
+        .select('*')
+        .eq('employee_id', emp.id)
+        .eq('work_date', toYmd(new Date()))
+        .maybeSingle()
+      setTodayRow((row as EmployeeAttendance) ?? null)
+    }
+  }
+
+  async function verifyAtClinic(): Promise<boolean> {
+    setError(null)
+    if (settings.clinic_latitude == null || settings.clinic_longitude == null) {
+      setError("The clinic's location hasn't been set up yet — ask the owner to set it in Settings → Attendance.")
+      return false
+    }
+    let pos: GeolocationPosition
+    try {
+      pos = await getPosition()
+    } catch (e) {
+      const code = (e as GeolocationPositionError)?.code
+      if (code === 1) setError('Location access was denied. Please allow location access for this site in your browser settings and try again.')
+      else if (code === 3) setError('Getting your location timed out. Please try again.')
+      else if ((e as Error)?.message === 'geolocation-unsupported') setError("Your browser doesn't support location, so we can't verify you're at the clinic.")
+      else setError("Couldn't get your location. Please try again.")
+      return false
+    }
+    const dist = distanceMeters(pos.coords.latitude, pos.coords.longitude, settings.clinic_latitude, settings.clinic_longitude)
+    if (dist > settings.attendance_radius_meters) {
+      setError(`You're about ${Math.round(dist)}m from the clinic — you need to be within ${settings.attendance_radius_meters}m to sign in/out.`)
+      return false
+    }
+    return true
+  }
+
+  async function handleSignIn() {
+    if (!employee) return
+    setWorking(true)
+    const ok = await verifyAtClinic()
+    if (!ok) {
+      setWorking(false)
+      return
+    }
+    const row = {
+      employee_id: employee.id,
+      work_date: toYmd(new Date()),
+      check_in: nowTimeString(),
+      created_by: session?.user.id,
+    }
+    const { data, error: dbErr } = await supabase.from('employee_attendance').upsert(row, { onConflict: 'employee_id,work_date' }).select().single()
+    setWorking(false)
+    if (dbErr) return setError(dbErr.message)
+    setTodayRow(data as EmployeeAttendance)
+  }
+
+  async function handleSignOut() {
+    if (!employee || !todayRow) return
+    setWorking(true)
+    const ok = await verifyAtClinic()
+    if (!ok) {
+      setWorking(false)
+      return
+    }
+    const { data, error: dbErr } = await supabase
+      .from('employee_attendance')
+      .update({ check_out: nowTimeString() })
+      .eq('employee_id', employee.id)
+      .eq('work_date', toYmd(new Date()))
+      .select()
+      .single()
+    setWorking(false)
+    if (dbErr) return setError(dbErr.message)
+    setTodayRow(data as EmployeeAttendance)
+  }
+
+  if (!employee) return null // dentist / anyone without a linked employee record: nothing to clock
+
+  return (
+    <section className="rounded-xl border border-slate-200 bg-white p-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <p className="text-sm font-medium text-navy-900">Attendance</p>
+          {!todayRow?.check_in && <p className="text-xs text-slate-500">You haven't signed in today.</p>}
+          {todayRow?.check_in && !todayRow.check_out && <p className="text-xs text-slate-500">Signed in at {fmtTime(todayRow.check_in)}.</p>}
+          {todayRow?.check_in && todayRow.check_out && (
+            <p className="text-xs text-slate-500">
+              {fmtTime(todayRow.check_in)} – {fmtTime(todayRow.check_out)} · {attendanceHours(todayRow).toFixed(1)}h today
+            </p>
+          )}
+        </div>
+        {!todayRow?.check_in ? (
+          <button onClick={handleSignIn} disabled={working} className="rounded-lg bg-green-600 px-4 py-2 text-sm font-medium text-white hover:bg-green-700 disabled:opacity-50">
+            {working ? 'Checking location…' : '📍 Sign In'}
+          </button>
+        ) : !todayRow.check_out ? (
+          <button onClick={handleSignOut} disabled={working} className="rounded-lg bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700 disabled:opacity-50">
+            {working ? 'Checking location…' : '📍 Sign Out'}
+          </button>
+        ) : (
+          <span className="rounded-lg bg-slate-100 px-4 py-2 text-sm font-medium text-slate-500">✓ Done for today</span>
+        )}
+      </div>
+      {error && <p className="mt-2 text-xs text-red-600">{error}</p>}
+    </section>
+  )
 }
 
 export default function Dashboard() {
@@ -263,6 +421,8 @@ export default function Dashboard() {
   return (
     <div className="space-y-8">
       <h1 className="text-2xl font-semibold text-navy-900">Dashboard</h1>
+
+      <ClockWidget />
 
       {/* Quick glance */}
       <section>

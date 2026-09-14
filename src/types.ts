@@ -219,6 +219,19 @@ export interface AppSettings {
   expense_description_required: boolean
   big_debt_threshold: number
   visit_provider_required: boolean
+  clinic_latitude: number | null
+  clinic_longitude: number | null
+  attendance_radius_meters: number
+}
+
+/** Distance in meters between two lat/lng points (haversine). */
+export function distanceMeters(lat1: number, lng1: number, lat2: number, lng2: number): number {
+  const R = 6371000
+  const toRad = (d: number) => (d * Math.PI) / 180
+  const dLat = toRad(lat2 - lat1)
+  const dLng = toRad(lng2 - lng1)
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2
+  return 2 * R * Math.asin(Math.sqrt(a))
 }
 
 /** Round a value to the nearest `increment` (0 or 1 = no rounding). */
@@ -754,6 +767,7 @@ export interface Employee {
   annual_leave_days: number
   active: boolean
   created_at: string
+  user_id: string | null
 }
 
 /** Duration in hours between two 'HH:MM'/'HH:MM:SS' times, treating end<=start as an overnight shift. */

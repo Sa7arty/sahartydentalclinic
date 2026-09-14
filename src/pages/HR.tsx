@@ -202,7 +202,7 @@ function EmployeesTab({ employees, settings, onChanged }: { employees: Employee[
         {employees.map((e) =>
           editingId === e.id ? (
             <div key={e.id} className="py-3">
-              <EmployeeForm employee={e} settings={settings} onSave={(p, f) => handleSave(p, f, e.id)} onCancel={() => setEditingId(null)} />
+              <EmployeeForm employee={e} settings={settings} onSave={(p, f, login) => handleSave(p, f, e.id, login)} onCancel={() => setEditingId(null)} />
             </div>
           ) : (
             <div key={e.id} className="flex items-center justify-between gap-3 py-3">
@@ -211,6 +211,11 @@ function EmployeesTab({ employees, settings, onChanged }: { employees: Employee[
                   {employeeFullName(e)} {!e.active && <span className="text-xs font-normal text-slate-400">(inactive)</span>}
                   <ExpiryBadge label="Last day" date={e.last_working_day} />
                   <ExpiryBadge label="ID" date={e.national_id_expiry} />
+                  {e.user_id ? (
+                    <span className="rounded-full bg-green-100 px-1.5 py-0.5 text-[10px] font-semibold text-green-700">Has login</span>
+                  ) : (
+                    <span className="rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold text-slate-500">No login yet</span>
+                  )}
                 </p>
                 <p className="text-xs text-slate-500">
                   {[
@@ -318,7 +323,7 @@ function EmployeeForm({
         active: f.get('active') === 'on',
       },
       file,
-      !employee && makeLogin
+      (!employee || !employee.user_id) && makeLogin
         ? { email: String(f.get('login_email') || f.get('email') || '').trim(), password: String(f.get('login_password') || ''), role: String(f.get('login_role') || 'assistant') }
         : null,
     )
@@ -441,7 +446,7 @@ function EmployeeForm({
         Active
       </label>
 
-      {!employee && (
+      {(!employee || !employee.user_id) && (
         <div className="rounded-lg border border-slate-200 bg-white p-3 sm:col-span-2">
           <label className="flex items-center gap-2 text-sm font-medium text-navy-800">
             <input type="checkbox" checked={makeLogin} onChange={(e) => setMakeLogin(e.target.checked)} />
