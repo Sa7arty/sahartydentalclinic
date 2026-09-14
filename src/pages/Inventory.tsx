@@ -75,7 +75,9 @@ export default function Inventory() {
       for (const h of (ch as InventoryClusterHistory[]) ?? []) (chMap[h.cluster_id] = chMap[h.cluster_id] ?? []).push(h)
       setClusterHistory(chMap)
 
-      const { data: it } = await supabase.from('inventory_items').select('*').in('cluster_id', clusterList.map((c) => c.id)).eq('active', true).order('position')
+      // Loads BOTH active and retired items — a retired item/cluster still needs to render
+      // for the past months it actually has counts for (see itemVisible/clusterVisible).
+      const { data: it } = await supabase.from('inventory_items').select('*').in('cluster_id', clusterList.map((c) => c.id)).order('position')
       const itemList = (it as InventoryItem[]) ?? []
       setItems(itemList)
 
@@ -256,11 +258,19 @@ export default function Inventory() {
     resolveAsOfMonth(itemHistory[item.id] ?? [], month, { name: item.name, brand: item.brand, original_quantity: item.original_quantity })
   const resolvedClusterName = (cluster: InventoryCluster) => resolveAsOfMonth(clusterHistory[cluster.id] ?? [], month, { name: cluster.name }).name
 
+  // A retired (inactive) item/cluster only belongs in the CURRENTLY VIEWED month if it
+  // actually has a real count recorded for that exact period — otherwise it simply didn't
+  // exist under tracking then and shouldn't clutter the view. Active ones always show.
+  const clusterVisible = (c: InventoryCluster) => c.active || (itemsByCluster[c.id] ?? []).some((i) => counts[i.id] !== undefined)
+  const itemVisible = (i: InventoryItem) => i.active || counts[i.id] !== undefined
+
+  const visibleClusters = useMemo(() => clusters.filter(clusterVisible), [clusters, itemsByCluster, counts])
+
   const orderLines = useMemo(() => {
     const lines: { cluster: string; name: string; brand: string; qty: number }[] = []
     for (const c of clusters) {
       const clusterName = resolvedClusterName(c)
-      for (const i of itemsByCluster[c.id] ?? []) {
+      for (const i of (itemsByCluster[c.id] ?? []).filter(itemVisible)) {
         const ri = resolvedItem(i)
         const qty = needToBuy(ri.original_quantity, counts[i.id]?.current_quantity ?? null)
         if (qty > 0) lines.push({ cluster: clusterName, name: ri.name, brand: ri.brand ?? '', qty })
@@ -312,7 +322,7 @@ export default function Inventory() {
             {isPastMonth && isDentist && <span className="ml-1 rounded bg-slate-100 px-1 text-slate-500">Past month — showing history as it was then; editing items or locations always applies from the current month on.</span>}
           </p>
 
-          {clusters.map((cluster, ci) => (
+          {visibleClusters.map((cluster, ci) => (
             <div key={cluster.id} className="overflow-hidden rounded-xl border border-slate-200 bg-white">
               <div className="flex items-center justify-between gap-2 border-b border-slate-100 bg-slate-50 px-3 py-2">
                 {canManage ? (
@@ -329,7 +339,7 @@ export default function Inventory() {
                     <button onClick={() => handleMoveCluster(cluster, -1)} disabled={ci === 0} className="rounded px-1 text-slate-500 hover:bg-slate-200 disabled:opacity-30">
                       ↑
                     </button>
-                    <button onClick={() => handleMoveCluster(cluster, 1)} disabled={ci === clusters.length - 1} className="rounded px-1 text-slate-500 hover:bg-slate-200 disabled:opacity-30">
+                    <button onClick={() => handleMoveCluster(cluster, 1)} disabled={ci === visibleClusters.length - 1} className="rounded px-1 text-slate-500 hover:bg-slate-200 disabled:opacity-30">
                       ↓
                     </button>
                     <button onClick={() => setAddingToCluster(addingToCluster === cluster.id ? null : cluster.id)} className="font-medium text-navy-700 hover:underline">
@@ -355,7 +365,7 @@ export default function Inventory() {
                   </tr>
                 </thead>
                 <tbody>
-                  {(itemsByCluster[cluster.id] ?? []).map((item, ii, arr) => {
+                  {(itemsByCluster[cluster.id] ?? []).filter(itemVisible).map((item, ii, arr) => {
                     const ri = resolvedItem(item)
                     return editingItemId === item.id ? (
                       <tr key={item.id} className="border-t border-slate-100 bg-slate-50">
@@ -422,7 +432,7 @@ export default function Inventory() {
                       </tr>
                     )
                   })}
-                  {(itemsByCluster[cluster.id] ?? []).length === 0 && (
+                  {(itemsByCluster[cluster.id] ?? []).filter(itemVisible).length === 0 && (
                     <tr className="border-t border-slate-100">
                       <td colSpan={canManage ? 7 : 6} className="px-3 py-2 text-xs text-slate-400">
                         No items in this location yet.
@@ -481,12 +491,13 @@ export default function Inventory() {
 
           <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
             {orderLines.length === 0 && <p className="p-4 text-sm text-slate-500">Nothing to order — everything is at or above target.</p>}
-            {clusters.map((c) => {
-              const lines = orderLines.filter((l) => l.cluster === c.name)
+            {visibleClusters.map((c) => {
+              const clusterName = resolvedClusterName(c)
+              const lines = orderLines.filter((l) => l.cluster === clusterName)
               if (lines.length === 0) return null
               return (
                 <div key={c.id}>
-                  <p className="border-b border-slate-100 bg-slate-50 px-4 py-1.5 text-xs font-semibold uppercase tracking-wide text-slate-400">{c.name}</p>
+                  <p className="border-b border-slate-100 bg-slate-50 px-4 py-1.5 text-xs font-semibold uppercase tracking-wide text-slate-400">{clusterName}</p>
                   {lines.map((l, i) => (
                     <div key={i} className="flex items-center justify-between border-b border-slate-100 px-4 py-2 last:border-0">
                       <p className="text-navy-900">

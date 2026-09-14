@@ -1089,6 +1089,7 @@ export interface InventoryCluster {
   inventory_id: string
   name: string
   position: number
+  active: boolean
 }
 
 export interface InventoryItem {
