@@ -1236,3 +1236,39 @@ alter table public.providers add column if not exists user_id uuid references au
 alter table public.providers add column if not exists google_calendar_sync_enabled boolean not null default false;
 alter table public.providers add column if not exists google_calendar_id text;
 alter table public.visits add column if not exists google_event_id text;
+
+-- Patient "Letters" (referrals, medical reports, sick-leave/cost-confirmation
+-- letters, etc.) — same audit-trail shape as prescriptions. `field_values` +
+-- `letter_type` are enough to fully reconstruct the printed letter on demand
+-- (see LETTER_TEMPLATES in src/lib/letterTemplates.ts), so the rendered body
+-- text itself isn't stored.
+create table if not exists public.patient_letters (
+  id uuid primary key default gen_random_uuid(),
+  patient_id uuid not null references public.patients(id) on delete cascade,
+  letter_type text not null,
+  title text not null,
+  field_values jsonb not null default '{}'::jsonb,
+  author_name text,
+  created_by uuid default auth.uid(),
+  created_at timestamptz not null default now()
+);
+create index if not exists patient_letters_patient_idx on public.patient_letters(patient_id);
+alter table public.patient_letters enable row level security;
+create policy "staff manage letters for accessible patients"
+on public.patient_letters for all
+using (
+  has_role(auth.uid(), 'dentist'::app_role)
+  or exists (select 1 from public.patients p where p.id = patient_letters.patient_id and has_location_access(auth.uid(), p.primary_location_id))
+)
+with check (
+  has_role(auth.uid(), 'dentist'::app_role)
+  or exists (select 1 from public.patients p where p.id = patient_letters.patient_id and has_location_access(auth.uid(), p.primary_location_id))
+);
+
+-- Every PDF the app exports (receipts, prescriptions, letters, payslips,
+-- inventory/staff reports, schedules) now shares one letterhead: the clinic
+-- logo + name at top (public/logo-letterhead.png, a downsized 320x320 copy
+-- of the official logo — the original 2048x2048 file bloated every exported
+-- PDF to ~16MB when embedded directly) and a contact-info footer bar at the
+-- bottom of every page. See drawLetterheadHeader/drawLetterheadFooter in
+-- src/lib/pdf.ts.

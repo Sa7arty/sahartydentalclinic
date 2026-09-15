@@ -118,6 +118,17 @@ export interface Prescription {
   created_at: string
 }
 
+export interface PatientLetter {
+  id: string
+  patient_id: string
+  letter_type: string
+  title: string
+  field_values: Record<string, string>
+  author_name: string | null
+  created_by: string | null
+  created_at: string
+}
+
 /** Common allergies relevant to dental care — datalist suggestions (free text still allowed). */
 export const COMMON_ALLERGIES: string[] = [
   'Penicillin',

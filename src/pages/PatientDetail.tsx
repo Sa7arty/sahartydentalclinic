@@ -8,7 +8,8 @@ import RoleGate from '../components/RoleGate'
 import PatientForm from '../components/PatientForm'
 import PatientBadges from '../components/PatientBadges'
 import ToothChart from '../components/ToothChart'
-import { exportLedgerStatementPdf, exportPrescriptionPdf, exportPaymentReceiptPdf } from '../lib/pdf'
+import { exportLedgerStatementPdf, exportPrescriptionPdf, exportPaymentReceiptPdf, exportLetterPdf } from '../lib/pdf'
+import { LETTER_TEMPLATES, getLetterTemplate } from '../lib/letterTemplates'
 import { formatDate, formatDateTime, toDatetimeLocal } from '../lib/dates'
 import {
   Patient,
@@ -25,6 +26,7 @@ import {
   COMMON_ALLERGIES,
   Prescription,
   PrescriptionItem,
+  PatientLetter,
   Expense,
   patientFullName,
   missingRequiredPatientFields,
@@ -41,7 +43,7 @@ import {
   nowLocalDatetimeValue,
 } from '../types'
 
-type Tab = 'info' | 'visits' | 'medical' | 'notes' | 'teeth' | 'photos' | 'ledger' | 'prescriptions'
+type Tab = 'info' | 'visits' | 'medical' | 'notes' | 'teeth' | 'photos' | 'ledger' | 'prescriptions' | 'letters'
 
 const EMPTY_RX: PrescriptionItem = { drug: '', dosage: '', frequency: '', duration: '', instructions: '' }
 
@@ -77,6 +79,10 @@ export default function PatientDetail() {
   const [rxItems, setRxItems] = useState<PrescriptionItem[]>([{ ...EMPTY_RX }])
   const [rxPrescriber, setRxPrescriber] = useState('')
   const [rxNotes, setRxNotes] = useState('')
+  const [letters, setLetters] = useState<PatientLetter[]>([])
+  const [letterTemplateKey, setLetterTemplateKey] = useState(LETTER_TEMPLATES[0].key)
+  const [letterAuthor, setLetterAuthor] = useState('')
+  const [letterValues, setLetterValues] = useState<Record<string, string>>({})
   const [conditionOptions, setConditionOptions] = useState<string[]>([])
   const [locations, setLocations] = useState<Location[]>([])
   const [providers, setProviders] = useState<Provider[]>([])
@@ -116,6 +122,7 @@ export default function PatientDetail() {
       { data: condOpts },
       { data: alg },
       { data: rx },
+      { data: ltrs },
     ] = await Promise.all([
       supabase.from('patients').select(PATIENT_SELECT).eq('id', patientId).single(),
       supabase.from('visits').select('*, provider:providers(first_name,last_name)').eq('patient_id', patientId).order('scheduled_at', { ascending: false }),
@@ -131,6 +138,7 @@ export default function PatientDetail() {
       supabase.from('medical_conditions').select('name').eq('active', true).order('name'),
       supabase.from('patient_allergies').select('*').eq('patient_id', patientId).order('created_at'),
       supabase.from('prescriptions').select('*').eq('patient_id', patientId).order('created_at', { ascending: false }),
+      supabase.from('patient_letters').select('*').eq('patient_id', patientId).order('created_at', { ascending: false }),
     ])
     setPatient(p ?? null)
     setVisits(v ?? [])
@@ -142,13 +150,17 @@ export default function PatientDetail() {
     setMedications(meds ?? [])
     setAllergies(alg ?? [])
     setPrescriptions((rx as Prescription[]) ?? [])
+    setLetters((ltrs as PatientLetter[]) ?? [])
     setLocations(locs ?? [])
     setProviders(prov ?? [])
     setGroups(grp ?? [])
     setConditionOptions((condOpts ?? []).map((c: any) => c.name))
     // Default the prescriber to the patient's assigned provider (only if not already typed).
     const prescriber = (prov ?? []).find((pr: any) => pr.id === (p as any)?.provider_id)
-    if (prescriber) setRxPrescriber((cur) => cur || providerFullName(prescriber))
+    if (prescriber) {
+      setRxPrescriber((cur) => cur || providerFullName(prescriber))
+      setLetterAuthor((cur) => cur || `Dr. ${providerFullName(prescriber)}`)
+    }
     setLoading(false)
   }
 
@@ -191,6 +203,54 @@ export default function PatientDetail() {
   async function handleDeletePrescription(pid: string) {
     if (!confirm('Delete this prescription? This cannot be undone.')) return
     const { error } = await supabase.from('prescriptions').delete().eq('id', pid)
+    if (error) alert(error.message)
+    else if (id) load(id)
+  }
+
+  function updateLetterField(key: string, val: string) {
+    setLetterValues((v) => ({ ...v, [key]: val }))
+  }
+  function printLetter(templateKey: string, values: Record<string, string>, authorName: string) {
+    if (!patient) return
+    const template = getLetterTemplate(templateKey)
+    if (!template) return
+    const title = template.titleOverride ? template.titleOverride(values) : template.label
+    const body = template.buildBody(patientFullName(patient), values)
+    exportLetterPdf(title, patient, new Date().toLocaleDateString(), body, authorName)
+  }
+  async function handleSaveLetter() {
+    if (!id) return
+    const template = getLetterTemplate(letterTemplateKey)
+    if (!template) return
+    const missing = template.fields.filter((f) => f.required && !(letterValues[f.key] ?? f.defaultValue ?? '').trim())
+    if (missing.length > 0) {
+      alert(`Please fill in: ${missing.map((f) => f.label).join(', ')}`)
+      return
+    }
+    const values: Record<string, string> = {}
+    for (const f of template.fields) values[f.key] = (letterValues[f.key] ?? f.defaultValue ?? '').trim()
+    const title = template.titleOverride ? template.titleOverride(values) : template.label
+    const { error } = await supabase.from('patient_letters').insert({
+      patient_id: id,
+      letter_type: template.key,
+      title,
+      field_values: values,
+      author_name: letterAuthor.trim() || null,
+    })
+    if (error) {
+      alert(error.message)
+      return
+    }
+    printLetter(template.key, values, letterAuthor.trim())
+    setLetterValues({})
+    load(id)
+  }
+  function reprintLetter(l: PatientLetter) {
+    printLetter(l.letter_type, l.field_values, l.author_name || '')
+  }
+  async function handleDeleteLetter(lid: string) {
+    if (!confirm('Delete this letter? This cannot be undone.')) return
+    const { error } = await supabase.from('patient_letters').delete().eq('id', lid)
     if (error) alert(error.message)
     else if (id) load(id)
   }
@@ -627,6 +687,7 @@ export default function PatientDetail() {
     { key: 'photos', label: 'Documents & X-rays' },
     { key: 'ledger', label: 'Ledger' },
     { key: 'prescriptions', label: 'Prescriptions' },
+    { key: 'letters', label: 'Letters' },
   ]
 
   const hasAlerts = allergies.length > 0 || conditions.length > 0 || patient.is_smoker
@@ -1446,6 +1507,139 @@ export default function PatientDetail() {
                     Print
                   </button>
                   <button onClick={() => handleDeletePrescription(p.id)} className="text-xs text-red-600 hover:underline">
+                    Delete
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {tab === 'letters' && (
+        <div className="space-y-4">
+          <div className="rounded-xl border border-slate-200 bg-white p-4">
+            <h2 className="mb-3 font-medium text-navy-900">New letter</h2>
+
+            <div className="mb-3 grid gap-3 sm:grid-cols-2">
+              <div>
+                <label className="mb-1 block text-xs text-slate-500">Letter type</label>
+                <select
+                  value={letterTemplateKey}
+                  onChange={(e) => {
+                    setLetterTemplateKey(e.target.value)
+                    setLetterValues({})
+                  }}
+                  className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                >
+                  {['Referral', 'Medical report', 'Administrative'].map((cat) => (
+                    <optgroup key={cat} label={cat}>
+                      {LETTER_TEMPLATES.filter((t) => t.category === cat).map((t) => (
+                        <option key={t.key} value={t.key}>
+                          {t.label}
+                        </option>
+                      ))}
+                    </optgroup>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="mb-1 block text-xs text-slate-500">Signed by</label>
+                <input
+                  value={letterAuthor}
+                  onChange={(e) => setLetterAuthor(e.target.value)}
+                  placeholder="Doctor's name"
+                  className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                />
+              </div>
+            </div>
+
+            {(() => {
+              const template = getLetterTemplate(letterTemplateKey)
+              if (!template) return null
+              return (
+                <div className="space-y-3">
+                  {template.fields.map((f) => {
+                    const value = letterValues[f.key] ?? f.defaultValue ?? ''
+                    if (f.type === 'textarea')
+                      return (
+                        <div key={f.key}>
+                          <label className="mb-1 block text-xs text-slate-500">
+                            {f.label}
+                            {f.required ? ' *' : ''}
+                          </label>
+                          <textarea
+                            value={value}
+                            onChange={(e) => updateLetterField(f.key, e.target.value)}
+                            placeholder={f.placeholder}
+                            rows={f.key === 'body' ? 8 : 3}
+                            className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                          />
+                        </div>
+                      )
+                    if (f.type === 'select')
+                      return (
+                        <div key={f.key}>
+                          <label className="mb-1 block text-xs text-slate-500">
+                            {f.label}
+                            {f.required ? ' *' : ''}
+                          </label>
+                          <select
+                            value={value}
+                            onChange={(e) => updateLetterField(f.key, e.target.value)}
+                            className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm sm:max-w-sm"
+                          >
+                            <option value="">— Select —</option>
+                            {(f.options ?? []).map((o) => (
+                              <option key={o} value={o}>
+                                {o}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      )
+                    return (
+                      <div key={f.key}>
+                        <label className="mb-1 block text-xs text-slate-500">
+                          {f.label}
+                          {f.required ? ' *' : ''}
+                        </label>
+                        <input
+                          type={f.type === 'number' ? 'number' : f.type === 'date' ? 'date' : 'text'}
+                          value={value}
+                          onChange={(e) => updateLetterField(f.key, e.target.value)}
+                          placeholder={f.placeholder}
+                          className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm sm:max-w-sm"
+                        />
+                      </div>
+                    )
+                  })}
+                </div>
+              )
+            })()}
+
+            <button onClick={handleSaveLetter} className="mt-4 rounded-lg bg-gold-500 px-4 py-2 text-sm font-medium text-navy-950 hover:bg-gold-400">
+              Save &amp; print (PDF)
+            </button>
+          </div>
+
+          <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+            <p className="border-b border-slate-100 bg-slate-50 px-4 py-2 text-sm font-medium text-navy-900">Past letters</p>
+            {letters.length === 0 && <p className="p-4 text-sm text-slate-500">No letters yet.</p>}
+            {letters.map((l) => (
+              <div key={l.id} className="flex items-start justify-between gap-3 border-b border-slate-100 px-4 py-3 last:border-0">
+                <div className="min-w-0">
+                  <p className="text-sm font-medium text-navy-900">{l.title}</p>
+                  <p className="text-xs text-slate-500">
+                    {formatDate(l.created_at)}
+                    {l.author_name ? ` · ${l.author_name}` : ''}
+                  </p>
+                </div>
+                <div className="flex shrink-0 items-center gap-3">
+                  <button onClick={() => reprintLetter(l)} className="text-xs font-medium text-navy-700 hover:underline">
+                    Print
+                  </button>
+                  <button onClick={() => handleDeleteLetter(l.id)} className="text-xs text-red-600 hover:underline">
                     Delete
                   </button>
                 </div>
