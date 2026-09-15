@@ -236,6 +236,108 @@ function useScheduleDrag(onReschedule: (visitId: string, targetYmd: string, minu
   return { dragGhost, draggingVisitId: dragGhost?.visitId ?? null, startDrag, guardClick }
 }
 
+interface ResizeGhost {
+  visitId: string
+  patientName: string
+  status: VisitStatus
+  ymd: string
+  startMinutes: number
+  durationMinutes: number
+}
+
+/**
+ * Drag the top or bottom edge of an appointment block to change its length — like
+ * resizing a desktop window from its edge. Dragging the bottom edge moves the end
+ * time and keeps the start fixed; dragging the top edge moves the start time and
+ * keeps the end fixed. Always stays within one day column (no cross-day dragging),
+ * so unlike useScheduleDrag this only needs to track vertical movement.
+ */
+function useScheduleResize(onResize: (visitId: string, newScheduledAtISO: string, newDurationMinutes: number) => void) {
+  const [resizeGhost, setResizeGhost] = useState<ResizeGhost | null>(null)
+  const resizeRef = useRef<{
+    visitId: string
+    patientName: string
+    status: VisitStatus
+    ymd: string
+    edge: 'top' | 'bottom'
+    originalStartMinutes: number
+    originalDurationMinutes: number
+    startY: number
+    dragging: boolean
+    newStartMinutes: number
+    newDurationMinutes: number
+  } | null>(null)
+  const justResizedRef = useRef(false)
+
+  useEffect(() => {
+    function handleMove(e: PointerEvent) {
+      const r = resizeRef.current
+      if (!r) return
+      if (!r.dragging && Math.abs(e.clientY - r.startY) < 4) return
+      r.dragging = true
+
+      const deltaMinutes = Math.round((((e.clientY - r.startY) / HOUR_HEIGHT) * 60) / 15) * 15
+      const originalEnd = r.originalStartMinutes + r.originalDurationMinutes
+      if (r.edge === 'bottom') {
+        const newEnd = Math.min(24 * 60, Math.max(r.originalStartMinutes + 15, originalEnd + deltaMinutes))
+        r.newStartMinutes = r.originalStartMinutes
+        r.newDurationMinutes = newEnd - r.originalStartMinutes
+      } else {
+        const newStart = Math.max(0, Math.min(originalEnd - 15, r.originalStartMinutes + deltaMinutes))
+        r.newStartMinutes = newStart
+        r.newDurationMinutes = originalEnd - newStart
+      }
+      setResizeGhost({
+        visitId: r.visitId,
+        patientName: r.patientName,
+        status: r.status,
+        ymd: r.ymd,
+        startMinutes: r.newStartMinutes,
+        durationMinutes: r.newDurationMinutes,
+      })
+    }
+    function handleUp() {
+      const r = resizeRef.current
+      if (r?.dragging) {
+        justResizedRef.current = true
+        onResize(r.visitId, ymdAndMinutesToDate(r.ymd, r.newStartMinutes).toISOString(), r.newDurationMinutes)
+        setTimeout(() => {
+          justResizedRef.current = false
+        }, 0)
+      }
+      resizeRef.current = null
+      setResizeGhost(null)
+    }
+    window.addEventListener('pointermove', handleMove)
+    window.addEventListener('pointerup', handleUp)
+    return () => {
+      window.removeEventListener('pointermove', handleMove)
+      window.removeEventListener('pointerup', handleUp)
+    }
+  }, [onResize])
+
+  function startResize(e: React.PointerEvent, v: VisitRow, ymd: string, edge: 'top' | 'bottom') {
+    if (e.button !== 0) return
+    e.stopPropagation() // don't also start a move-drag on the same block
+    const startMinutes = minutesFromMidnight(v.scheduled_at)
+    resizeRef.current = {
+      visitId: v.id,
+      patientName: v.patient ? patientFullName(v.patient) : 'Unknown',
+      status: v.status,
+      ymd,
+      edge,
+      originalStartMinutes: startMinutes,
+      originalDurationMinutes: v.duration_minutes,
+      startY: e.clientY,
+      dragging: false,
+      newStartMinutes: startMinutes,
+      newDurationMinutes: v.duration_minutes,
+    }
+  }
+
+  return { resizeGhost, resizingVisitId: resizeGhost?.visitId ?? null, startResize }
+}
+
 export default function Schedule() {
   const { locationIds, isDentist } = useAuth()
   const { settings } = useSettings()
@@ -303,6 +405,14 @@ export default function Schedule() {
     const scheduledAt = ymdAndMinutesToDate(targetYmd, minutesFromMidnight).toISOString()
     setVisits((cur) => cur.map((v) => (v.id === visitId ? { ...v, scheduled_at: scheduledAt } : v)))
     const { error } = await supabase.from('visits').update({ scheduled_at: scheduledAt }).eq('id', visitId)
+    if (error) alert(error.message)
+    else syncVisitToGoogle(visitId)
+  }
+
+  /** Dragged an appointment block's top or bottom edge to change its length. */
+  async function handleResizeVisit(visitId: string, newScheduledAtISO: string, newDurationMinutes: number) {
+    setVisits((cur) => cur.map((v) => (v.id === visitId ? { ...v, scheduled_at: newScheduledAtISO, duration_minutes: newDurationMinutes } : v)))
+    const { error } = await supabase.from('visits').update({ scheduled_at: newScheduledAtISO, duration_minutes: newDurationMinutes }).eq('id', visitId)
     if (error) alert(error.message)
     else syncVisitToGoogle(visitId)
   }
@@ -458,6 +568,7 @@ export default function Schedule() {
           onChangeStatus={handleChangeStatus}
           onCreateVisit={handleCreateVisitAt}
           onReschedule={handleReschedule}
+          onResize={handleResizeVisit}
           conditionIds={conditionIds}
           elderlyThreshold={settings.elderly_age_threshold}
         />
@@ -472,6 +583,7 @@ export default function Schedule() {
           onEdit={setEditingVisit}
           onCreateVisit={handleCreateVisitAt}
           onReschedule={handleReschedule}
+          onResize={handleResizeVisit}
           conditionIds={conditionIds}
           elderlyThreshold={settings.elderly_age_threshold}
         />
@@ -641,6 +753,9 @@ function DayGridColumn({
   draggingVisitId,
   onStartDrag,
   guardClick,
+  resizeGhost,
+  resizingVisitId,
+  onStartResize,
   conditionIds,
   elderlyThreshold,
   dayHours,
@@ -656,6 +771,9 @@ function DayGridColumn({
   draggingVisitId: string | null
   onStartDrag: (e: React.PointerEvent, v: VisitRow, originYmd: string) => void
   guardClick: (e: React.MouseEvent, onEdit: () => void) => void
+  resizeGhost: ResizeGhost | null
+  resizingVisitId: string | null
+  onStartResize: (e: React.PointerEvent, v: VisitRow, ymd: string, edge: 'top' | 'bottom') => void
   conditionIds: Set<string>
   elderlyThreshold: number
   dayHours: DayHours
@@ -704,13 +822,18 @@ function DayGridColumn({
         const wa = !compact ? whatsappHref(v.patient?.phone ?? null) : null
         const showActions = !compact && (tel || wa)
         const isBeingDragged = draggingVisitId === v.id
+        const isBeingResized = resizingVisitId === v.id
         return (
           <div
             key={v.id}
             onPointerDown={(e) => onStartDrag(e, v, ymd)}
-            className={`absolute cursor-grab select-none overflow-hidden rounded-md border text-white active:cursor-grabbing ${visitBlockClass(v.status)} ${isBeingDragged ? 'opacity-30' : ''}`}
+            className={`absolute cursor-grab select-none overflow-hidden rounded-md border text-white active:cursor-grabbing ${visitBlockClass(v.status)} ${isBeingDragged || isBeingResized ? 'opacity-30' : ''}`}
             style={{ top, height, left: `calc(${col * widthPct}% + 1px)`, width: `calc(${widthPct}% - 2px)`, touchAction: 'none' }}
           >
+            <div
+              onPointerDown={(e) => onStartResize(e, v, ymd, 'top')}
+              className="absolute inset-x-0 top-0 z-10 h-1.5 cursor-ns-resize"
+            />
             <button
               onClick={(e) => guardClick(e, () => onEdit(v))}
               className={`block w-full px-1.5 py-0.5 text-left text-[10px] leading-tight ${showActions ? 'pr-14' : ''}`}
@@ -773,9 +896,28 @@ function DayGridColumn({
                 ))}
               </select>
             )}
+            <div
+              onPointerDown={(e) => onStartResize(e, v, ymd, 'bottom')}
+              className="absolute inset-x-0 bottom-0 z-10 h-1.5 cursor-ns-resize"
+            />
           </div>
         )
       })}
+      {resizeGhost && resizeGhost.ymd === ymd && (
+        <div
+          className={`pointer-events-none absolute z-30 overflow-hidden rounded-md border-2 border-dashed border-white text-white shadow-lg ${visitBlockClass(resizeGhost.status)}`}
+          style={{
+            top: (resizeGhost.startMinutes / 60) * HOUR_HEIGHT,
+            height: Math.max((resizeGhost.durationMinutes / 60) * HOUR_HEIGHT, 18),
+            left: 1,
+            right: 1,
+          }}
+        >
+          <p className="truncate px-1.5 py-0.5 text-[10px] font-semibold">
+            {resizeGhost.patientName} · {quarterLabel(resizeGhost.startMinutes / 15)}–{quarterLabel((resizeGhost.startMinutes + resizeGhost.durationMinutes) / 15)}
+          </p>
+        </div>
+      )}
       {dragGhost && dragGhost.targetYmd === ymd && (
         <div
           className={`pointer-events-none absolute z-30 overflow-hidden rounded-md border-2 border-dashed border-white text-white shadow-lg ${visitBlockClass(dragGhost.status)}`}
@@ -821,6 +963,7 @@ function DayGridView({
   onChangeStatus,
   onCreateVisit,
   onReschedule,
+  onResize,
   conditionIds,
   elderlyThreshold,
 }: {
@@ -832,12 +975,14 @@ function DayGridView({
   onChangeStatus: (id: string, status: VisitStatus) => void
   onCreateVisit: (ymd: string, minutesFromMidnight: number) => void
   onReschedule: (visitId: string, targetYmd: string, minutesFromMidnight: number) => void
+  onResize: (visitId: string, newScheduledAtISO: string, newDurationMinutes: number) => void
   conditionIds: Set<string>
   elderlyThreshold: number
 }) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const dayHours = dayHoursFor(businessHours, ymd)
   const { dragGhost, draggingVisitId, startDrag, guardClick } = useScheduleDrag(onReschedule)
+  const { resizeGhost, resizingVisitId, startResize } = useScheduleResize(onResize)
 
   useEffect(() => {
     const scrollToMin = dayHours.closed ? 8 * 60 : Math.max(0, parseHHMM(dayHours.open) - 60)
@@ -862,6 +1007,9 @@ function DayGridView({
             draggingVisitId={draggingVisitId}
             onStartDrag={startDrag}
             guardClick={guardClick}
+            resizeGhost={resizeGhost}
+            resizingVisitId={resizingVisitId}
+            onStartResize={startResize}
             conditionIds={conditionIds}
             elderlyThreshold={elderlyThreshold}
             dayHours={dayHours}
@@ -883,6 +1031,7 @@ function WeekView({
   onEdit,
   onCreateVisit,
   onReschedule,
+  onResize,
   conditionIds,
   elderlyThreshold,
 }: {
@@ -895,12 +1044,14 @@ function WeekView({
   onEdit: (v: VisitRow) => void
   onCreateVisit: (ymd: string, minutesFromMidnight: number) => void
   onReschedule: (visitId: string, targetYmd: string, minutesFromMidnight: number) => void
+  onResize: (visitId: string, newScheduledAtISO: string, newDurationMinutes: number) => void
   conditionIds: Set<string>
   elderlyThreshold: number
 }) {
   const days = Array.from({ length: 7 }, (_, i) => addDays(rangeStart, i))
   const scrollRef = useRef<HTMLDivElement>(null)
   const { dragGhost, draggingVisitId, startDrag, guardClick } = useScheduleDrag(onReschedule)
+  const { resizeGhost, resizingVisitId, startResize } = useScheduleResize(onResize)
 
   useEffect(() => {
     const scrollToMin = earliestOpenMinutes(days, businessHours)
@@ -943,6 +1094,9 @@ function WeekView({
               draggingVisitId={draggingVisitId}
               onStartDrag={startDrag}
               guardClick={guardClick}
+              resizeGhost={resizeGhost}
+              resizingVisitId={resizingVisitId}
+              onStartResize={startResize}
               conditionIds={conditionIds}
               elderlyThreshold={elderlyThreshold}
               dayHours={dayHoursFor(businessHours, ymd)}

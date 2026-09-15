@@ -220,6 +220,7 @@ export default function Dashboard() {
   const [weekStats, setWeekStats] = useState<Stats>(emptyStats)
   const [lastWeekStats, setLastWeekStats] = useState<Stats>(emptyStats)
   const [monthStats, setMonthStats] = useState<Stats>(emptyStats)
+  const [lastMonthStats, setLastMonthStats] = useState<Stats>(emptyStats)
   const [loading, setLoading] = useState(true)
 
   const now = new Date()
@@ -246,7 +247,9 @@ export default function Dashboard() {
     const lastWeekEnd = new Date(weekStart)
     lastWeekEnd.setMilliseconds(-1)
 
-    const [{ data: todays }, { data: tomorrows }, ledgerRows, todayData, yesterdayData, weekData, lastWeekData, monthData] = await Promise.all([
+    const lastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1)
+
+    const [{ data: todays }, { data: tomorrows }, ledgerRows, todayData, yesterdayData, weekData, lastWeekData, monthData, lastMonthData] = await Promise.all([
       supabase
         .from('visits')
         .select('*, patient:patients(id, first_name, middle_name, last_name, phone, file_number, is_smoker), location:locations(name), provider:providers(first_name,last_name)')
@@ -265,6 +268,7 @@ export default function Dashboard() {
       loadStats(weekStart, now),
       loadStats(lastWeekStart, lastWeekEnd),
       loadStats(startOfMonth(now), endOfMonth(now)),
+      loadStats(startOfMonth(lastMonth), endOfMonth(lastMonth)),
     ])
 
     setTodaysVisits((todays as unknown as VisitRow[]) ?? [])
@@ -274,6 +278,7 @@ export default function Dashboard() {
     setWeekStats(weekData)
     setLastWeekStats(lastWeekData)
     setMonthStats(monthData)
+    setLastMonthStats(lastMonthData)
 
     const byPatient = new Map<string, BalanceRow>()
     for (const row of ledgerRows ?? []) {
@@ -463,8 +468,8 @@ export default function Dashboard() {
       </section>
 
       <section>
-        <h2 className="mb-3 text-lg font-medium text-navy-800">This month — {monthLabel}</h2>
-        {statTiles(monthStats)}
+        <h2 className="mb-3 text-lg font-medium text-navy-800">This month — {monthLabel} (vs last month)</h2>
+        {statTiles(monthStats, lastMonthStats)}
       </section>
 
       <section>
