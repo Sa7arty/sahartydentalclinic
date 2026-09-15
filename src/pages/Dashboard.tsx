@@ -81,7 +81,7 @@ function ClockWidget() {
   const { settings } = useSettings()
   const [employee, setEmployee] = useState<Employee | null | undefined>(undefined) // undefined = still loading
   const [todayRow, setTodayRow] = useState<EmployeeAttendance | null>(null)
-  const [working, setWorking] = useState(false)
+  const [working, setWorking] = useState<'in' | 'out' | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
@@ -128,12 +128,15 @@ function ClockWidget() {
     return true
   }
 
+  // Both buttons are always independently usable — someone who forgot to sign
+  // in that morning still needs to be able to sign out at the end of the day,
+  // not be blocked because there's no check-in on record yet.
   async function handleSignIn() {
-    if (!employee) return
-    setWorking(true)
+    if (!employee || todayRow?.check_in) return
+    setWorking('in')
     const ok = await verifyAtClinic()
     if (!ok) {
-      setWorking(false)
+      setWorking(null)
       return
     }
     const row = {
@@ -143,27 +146,29 @@ function ClockWidget() {
       created_by: session?.user.id,
     }
     const { data, error: dbErr } = await supabase.from('employee_attendance').upsert(row, { onConflict: 'employee_id,work_date' }).select().single()
-    setWorking(false)
+    setWorking(null)
     if (dbErr) return setError(dbErr.message)
     setTodayRow(data as EmployeeAttendance)
   }
 
   async function handleSignOut() {
-    if (!employee || !todayRow) return
-    setWorking(true)
+    if (!employee || todayRow?.check_out) return
+    setWorking('out')
     const ok = await verifyAtClinic()
     if (!ok) {
-      setWorking(false)
+      setWorking(null)
       return
     }
-    const { data, error: dbErr } = await supabase
-      .from('employee_attendance')
-      .update({ check_out: nowTimeString() })
-      .eq('employee_id', employee.id)
-      .eq('work_date', toYmd(new Date()))
-      .select()
-      .single()
-    setWorking(false)
+    // Upsert (not update) so signing out works even with no check-in on record
+    // yet — this only ever touches check_out, so an existing check_in is untouched.
+    const row = {
+      employee_id: employee.id,
+      work_date: toYmd(new Date()),
+      check_out: nowTimeString(),
+      created_by: session?.user.id,
+    }
+    const { data, error: dbErr } = await supabase.from('employee_attendance').upsert(row, { onConflict: 'employee_id,work_date' }).select().single()
+    setWorking(null)
     if (dbErr) return setError(dbErr.message)
     setTodayRow(data as EmployeeAttendance)
   }
@@ -175,25 +180,29 @@ function ClockWidget() {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <p className="text-sm font-medium text-navy-900">Attendance</p>
-          {!todayRow?.check_in && <p className="text-xs text-slate-500">You haven't signed in today.</p>}
-          {todayRow?.check_in && !todayRow.check_out && <p className="text-xs text-slate-500">Signed in at {fmtTime(todayRow.check_in)}.</p>}
-          {todayRow?.check_in && todayRow.check_out && (
-            <p className="text-xs text-slate-500">
-              {fmtTime(todayRow.check_in)} – {fmtTime(todayRow.check_out)} · {attendanceHours(todayRow).toFixed(1)}h today
-            </p>
-          )}
+          <p className="text-xs text-slate-500">
+            {todayRow?.check_in ? `Signed in at ${fmtTime(todayRow.check_in)}` : 'Not signed in yet'}
+            {' · '}
+            {todayRow?.check_out ? `Signed out at ${fmtTime(todayRow.check_out)}` : 'Not signed out yet'}
+            {todayRow?.check_in && todayRow?.check_out && ` · ${attendanceHours(todayRow).toFixed(1)}h today`}
+          </p>
         </div>
-        {!todayRow?.check_in ? (
-          <button onClick={handleSignIn} disabled={working} className="rounded-lg bg-green-600 px-4 py-2 text-sm font-medium text-white hover:bg-green-700 disabled:opacity-50">
-            {working ? 'Checking location…' : '📍 Sign In'}
+        <div className="flex gap-2">
+          <button
+            onClick={handleSignIn}
+            disabled={working !== null || !!todayRow?.check_in}
+            className="rounded-lg bg-green-600 px-4 py-2 text-sm font-medium text-white hover:bg-green-700 disabled:opacity-50"
+          >
+            {todayRow?.check_in ? `✓ In ${fmtTime(todayRow.check_in)}` : working === 'in' ? 'Checking location…' : '📍 Sign In'}
           </button>
-        ) : !todayRow.check_out ? (
-          <button onClick={handleSignOut} disabled={working} className="rounded-lg bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700 disabled:opacity-50">
-            {working ? 'Checking location…' : '📍 Sign Out'}
+          <button
+            onClick={handleSignOut}
+            disabled={working !== null || !!todayRow?.check_out}
+            className="rounded-lg bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700 disabled:opacity-50"
+          >
+            {todayRow?.check_out ? `✓ Out ${fmtTime(todayRow.check_out)}` : working === 'out' ? 'Checking location…' : '📍 Sign Out'}
           </button>
-        ) : (
-          <span className="rounded-lg bg-slate-100 px-4 py-2 text-sm font-medium text-slate-500">✓ Done for today</span>
-        )}
+        </div>
       </div>
       {error && <p className="mt-2 text-xs text-red-600">{error}</p>}
     </section>

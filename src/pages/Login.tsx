@@ -17,14 +17,10 @@ export default function Login() {
     setError(null)
     setSubmitting(true)
     // Usernames aren't a native Supabase Auth concept — resolve to the real
-    // email behind the scenes first, then sign in as usual.
-    const { data: email, error: lookupErr } = await supabase.rpc('get_email_for_username', { p_username: username })
-    if (lookupErr || !email) {
-      setSubmitting(false)
-      setError('Incorrect username or password.')
-      return
-    }
-    const { error } = await supabase.auth.signInWithPassword({ email, password })
+    // email behind the scenes first. If nothing matches, fall back to treating
+    // whatever they typed AS the email directly, so both still work.
+    const { data: resolvedEmail } = await supabase.rpc('get_email_for_username', { p_username: username })
+    const { error } = await supabase.auth.signInWithPassword({ email: resolvedEmail || username, password })
     setSubmitting(false)
     if (error) setError('Incorrect username or password.')
   }
@@ -37,7 +33,7 @@ export default function Login() {
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
-            <label className="mb-1 block text-sm text-slate-300">Username</label>
+            <label className="mb-1 block text-sm text-slate-300">Username or email</label>
             <input
               type="text"
               autoCapitalize="none"
