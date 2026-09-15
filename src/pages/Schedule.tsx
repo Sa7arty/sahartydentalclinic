@@ -1,7 +1,22 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
-import { Visit, Patient, Location, Provider, patientFullName, providerFullName, telHref, whatsappHref, VisitStatus, VISIT_STATUS_LABELS, VISIT_STATUS_COLORS, visitRowClass, visitChipClass } from '../types'
+import {
+  Visit,
+  Patient,
+  Location,
+  Provider,
+  patientFullName,
+  providerFullName,
+  telHref,
+  whatsappHref,
+  VisitStatus,
+  VISIT_STATUS_LABELS,
+  VISIT_STATUS_COLORS,
+  visitRowClass,
+  visitChipClass,
+  visitBlockClass,
+} from '../types'
 import { useAuth } from '../context/AuthContext'
 import { useSettings } from '../context/SettingsContext'
 import { toYmd, fromYmd, addDays, addMonths, startOfWeek, startOfMonth, endOfMonth, dayStart, dayEnd, toDatetimeLocal, WEEKDAY_NAMES_FROM } from '../lib/dates'
@@ -22,6 +37,62 @@ const DURATION_OPTIONS = [15, 20, 30, 45, 60, 75, 90, 120]
 
 function addMinutes(iso: string, minutes: number) {
   return new Date(new Date(iso).getTime() + minutes * 60000)
+}
+
+// --- Hour-grid week view (Google-Calendar-style) --------------------------
+
+const HOUR_HEIGHT = 56 // px per hour row
+const GRID_HOURS = Array.from({ length: 24 }, (_, i) => i)
+const BUSINESS_START_HOUR = 7
+const BUSINESS_END_HOUR = 21
+
+function hourLabel(hour: number) {
+  const h12 = hour % 12 === 0 ? 12 : hour % 12
+  return `${h12}:00 ${hour < 12 ? 'AM' : 'PM'}`
+}
+
+function minutesFromMidnight(iso: string) {
+  const d = new Date(iso)
+  return d.getHours() * 60 + d.getMinutes()
+}
+
+/** Greedy interval-graph column assignment so overlapping visits render side-by-side instead of stacking. */
+function layoutDayOverlaps(visits: VisitRow[]): Map<string, { col: number; cols: number }> {
+  const sorted = [...visits].sort((a, b) => a.scheduled_at.localeCompare(b.scheduled_at))
+  const result = new Map<string, { col: number; cols: number }>()
+  let clusterVisits: VisitRow[] = []
+  let clusterEnd = -1
+
+  function flushCluster() {
+    if (clusterVisits.length === 0) return
+    const colEnds: number[] = []
+    for (const v of clusterVisits) {
+      const start = minutesFromMidnight(v.scheduled_at)
+      const end = start + v.duration_minutes
+      let col = colEnds.findIndex((e) => e <= start)
+      if (col === -1) {
+        col = colEnds.length
+        colEnds.push(end)
+      } else {
+        colEnds[col] = end
+      }
+      result.set(v.id, { col, cols: 0 })
+    }
+    for (const v of clusterVisits) result.set(v.id, { col: result.get(v.id)!.col, cols: colEnds.length })
+    clusterVisits = []
+  }
+
+  for (const v of sorted) {
+    const start = minutesFromMidnight(v.scheduled_at)
+    if (clusterVisits.length > 0 && start >= clusterEnd) {
+      flushCluster()
+      clusterEnd = -1
+    }
+    clusterVisits.push(v)
+    clusterEnd = Math.max(clusterEnd, start + v.duration_minutes)
+  }
+  flushCluster()
+  return result
 }
 
 export default function Schedule() {
@@ -497,43 +568,94 @@ function WeekView({
   elderlyThreshold: number
 }) {
   const days = Array.from({ length: 7 }, (_, i) => addDays(rangeStart, i))
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const nowMinutes = new Date().getHours() * 60 + new Date().getMinutes()
+
+  useEffect(() => {
+    scrollRef.current?.scrollTo({ top: Math.max(0, (BUSINESS_START_HOUR - 1) * HOUR_HEIGHT) })
+  }, [rangeStart])
+
   return (
-    <div className="flex gap-3 overflow-x-auto pb-2">
-      {days.map((ymd, i) => {
-        const list = (byDay.get(ymd) ?? []).slice().sort((a, b) => a.scheduled_at.localeCompare(b.scheduled_at))
-        const isToday = ymd === today
-        const d = fromYmd(ymd)
-        return (
-          <div key={ymd} className="w-40 shrink-0 rounded-xl border border-slate-200 bg-white">
+    <div className="rounded-xl border border-slate-200 bg-white">
+      <div className="flex border-b border-slate-200">
+        <div className="w-12 shrink-0 sm:w-16" />
+        {days.map((ymd, i) => {
+          const isToday = ymd === today
+          const d = fromYmd(ymd)
+          return (
             <button
+              key={ymd}
               onClick={() => onSelectDay(ymd)}
-              className={`w-full rounded-t-xl border-b border-slate-100 px-3 py-2 text-left hover:bg-slate-50 ${isToday ? 'bg-gold-50' : ''}`}
+              className={`min-w-[110px] flex-1 border-l border-slate-100 py-2 text-center hover:bg-slate-50 ${isToday ? 'bg-gold-50' : ''}`}
             >
               <p className="text-xs text-slate-500">{weekdayNames[i]}</p>
-              <p className={`text-sm font-semibold ${isToday ? 'text-gold-600' : 'text-navy-900'}`}>{d.getDate()}</p>
+              <p className={`text-sm font-semibold ${isToday ? 'text-gold-600' : 'text-navy-900'}`}>
+                {d.getDate()}/{d.getMonth() + 1}
+              </p>
             </button>
-            <div className="max-h-72 space-y-1 overflow-y-auto p-2">
-              {list.length === 0 && <p className="px-1 py-2 text-xs text-slate-400">—</p>}
-              {list.map((v) => (
-                <button
-                  key={v.id}
-                  onClick={() => onEdit(v)}
-                  className={`block w-full rounded-md px-2 py-1 text-left text-xs ${visitChipClass(v.status)}`}
-                >
-                  <span className="font-medium">
-                    <VisitTimeRange v={v} />
-                  </span>
-                  <br />
-                  <span className="flex flex-wrap items-center gap-0.5">
-                    <span className="truncate">{v.patient ? patientFullName(v.patient) : 'Unknown'}</span>
-                    {v.patient && <PatientBadges patient={v.patient} elderlyAgeThreshold={elderlyThreshold} hasCondition={conditionIds.has(v.patient.id)} size="xs" />}
-                  </span>
-                </button>
-              ))}
+          )
+        })}
+      </div>
+      <div ref={scrollRef} className="flex max-h-[70vh] overflow-auto">
+        <div className="sticky left-0 z-10 w-12 shrink-0 bg-white sm:w-16">
+          {GRID_HOURS.map((h) => (
+            <div key={h} className="relative border-t border-slate-100" style={{ height: HOUR_HEIGHT }}>
+              <span className="absolute -top-2 right-1 text-[10px] text-slate-400">{hourLabel(h)}</span>
             </div>
-          </div>
-        )
-      })}
+          ))}
+        </div>
+        {days.map((ymd) => {
+          const list = byDay.get(ymd) ?? []
+          const layout = layoutDayOverlaps(list)
+          const isToday = ymd === today
+          return (
+            <div key={ymd} className="relative min-w-[110px] flex-1 border-l border-slate-100" style={{ height: HOUR_HEIGHT * 24 }}>
+              {GRID_HOURS.map((h) => (
+                <div
+                  key={h}
+                  className={`absolute inset-x-0 border-t border-slate-100 ${h < BUSINESS_START_HOUR || h >= BUSINESS_END_HOUR ? 'bg-slate-50' : ''}`}
+                  style={{ top: h * HOUR_HEIGHT, height: HOUR_HEIGHT }}
+                />
+              ))}
+              {isToday && (
+                <div className="absolute inset-x-0 z-20 border-t-2 border-red-500" style={{ top: (nowMinutes / 60) * HOUR_HEIGHT }}>
+                  <div className="absolute -left-1 -top-[5px] h-2 w-2 rounded-full bg-red-500" />
+                </div>
+              )}
+              {list.map((v) => {
+                const { col, cols } = layout.get(v.id) ?? { col: 0, cols: 1 }
+                const start = minutesFromMidnight(v.scheduled_at)
+                const top = (start / 60) * HOUR_HEIGHT
+                const height = Math.max((v.duration_minutes / 60) * HOUR_HEIGHT, 18)
+                const widthPct = 100 / cols
+                return (
+                  <button
+                    key={v.id}
+                    onClick={() => onEdit(v)}
+                    className={`absolute overflow-hidden rounded-md border px-1.5 py-0.5 text-left text-[10px] leading-tight text-white ${visitBlockClass(v.status)}`}
+                    style={{ top, height, left: `calc(${col * widthPct}% + 1px)`, width: `calc(${widthPct}% - 2px)` }}
+                  >
+                    <p className="flex items-center gap-0.5 truncate font-semibold">
+                      {v.patient ? patientFullName(v.patient) : 'Unknown'}
+                      {height >= 56 && v.patient && (
+                        <PatientBadges patient={v.patient} elderlyAgeThreshold={elderlyThreshold} hasCondition={conditionIds.has(v.patient.id)} size="xs" />
+                      )}
+                    </p>
+                    {height >= 28 && (
+                      <p className="truncate opacity-90">
+                        <VisitTimeRange v={v} />
+                      </p>
+                    )}
+                    {height >= 42 && v.provider && <p className="truncate opacity-90">{providerFullName(v.provider)}</p>}
+                    {height >= 56 && v.patient?.phone && <p className="truncate opacity-90">{v.patient.phone}</p>}
+                    {height >= 42 && <p className="truncate opacity-90">{VISIT_STATUS_LABELS[v.status]}</p>}
+                  </button>
+                )
+              })}
+            </div>
+          )
+        })}
+      </div>
     </div>
   )
 }

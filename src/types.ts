@@ -575,6 +575,21 @@ export function visitChipClass(status: VisitStatus): string {
   }
 }
 
+// Solid fill for a full calendar-grid event block (week view's hour grid) — needs
+// more contrast than the light chip variant since it's the entire block's background.
+export function visitBlockClass(status: VisitStatus): string {
+  switch (status) {
+    case 'unconfirmed':
+      return 'bg-sky-600 border-sky-700 hover:bg-sky-700'
+    case 'missed':
+      return 'bg-red-700 border-red-800 hover:bg-red-800'
+    case 'cancelled':
+      return 'bg-slate-400 border-slate-500 hover:bg-slate-500 line-through'
+    default:
+      return 'bg-green-600 border-green-700 hover:bg-green-700'
+  }
+}
+
 // Accent text colour for the patient name / status label in a row.
 export function visitTextClass(status: VisitStatus): string {
   switch (status) {
