@@ -30,7 +30,7 @@ export default function Layout() {
               ⟨
             </button>
           </div>
-          <nav className="flex flex-row gap-1 md:flex-col">
+          <nav className="flex flex-1 flex-row gap-1 overflow-x-auto md:flex-col md:overflow-visible">
             {canAccess('dashboard') && (
               <NavLink to="/" end className={({ isActive }) => `${navItem} ${isActive ? navItemActive : 'text-slate-200'}`}>
                 Dashboard
@@ -74,7 +74,7 @@ export default function Layout() {
           </nav>
           <button
             onClick={signOut}
-            className="mt-auto hidden rounded-lg px-4 py-2 text-left text-sm text-slate-300 hover:bg-navy-800 md:block"
+            className="ml-2 shrink-0 rounded-lg px-3 py-2 text-sm font-medium text-slate-300 hover:bg-navy-800 md:ml-0 md:mt-auto md:block md:w-full md:px-4 md:text-left md:font-normal"
           >
             Sign out
           </button>
@@ -83,13 +83,21 @@ export default function Layout() {
 
       <main className="flex-1 bg-slate-50 p-4 md:p-8">
         {collapsed && (
-          <button
-            onClick={toggle}
-            title="Show sidebar"
-            className="mb-4 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-navy-800 hover:bg-slate-50"
-          >
-            ☰ Menu
-          </button>
+          <div className="mb-4 flex items-center gap-2">
+            <button
+              onClick={toggle}
+              title="Show sidebar"
+              className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-navy-800 hover:bg-slate-50"
+            >
+              ☰ Menu
+            </button>
+            <button
+              onClick={signOut}
+              className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-navy-800 hover:bg-slate-50"
+            >
+              Sign out
+            </button>
+          </div>
         )}
         <Outlet />
       </main>
