@@ -1,7 +1,7 @@
 import { createContext, useContext, useEffect, useState, ReactNode } from 'react'
 import { Session } from '@supabase/supabase-js'
 import { supabase } from '../lib/supabase'
-import { AppRole } from '../types'
+import { AppRole, PageKey, DEFAULT_PAGE_ACCESS, UserPageAccess } from '../types'
 
 interface AuthContextValue {
   session: Session | null
@@ -10,6 +10,8 @@ interface AuthContextValue {
   locationIds: string[]
   isDentist: boolean
   isFrontDesk: boolean
+  /** Can the current user open this page? The dentist role always can. */
+  canAccess: (page: PageKey) => boolean
   signOut: () => Promise<void>
 }
 
@@ -19,6 +21,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null)
   const [roles, setRoles] = useState<AppRole[]>([])
   const [locationIds, setLocationIds] = useState<string[]>([])
+  const [pageAccess, setPageAccess] = useState<Record<string, boolean>>({})
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
@@ -34,6 +37,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       else {
         setRoles([])
         setLocationIds([])
+        setPageAccess({})
         setLoading(false)
       }
     })
@@ -43,12 +47,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   async function loadStaffContext(userId: string) {
     setLoading(true)
-    const [{ data: roleRows }, { data: locRows }] = await Promise.all([
+    const [{ data: roleRows }, { data: locRows }, { data: accessRows }] = await Promise.all([
       supabase.from('user_roles').select('role').eq('user_id', userId),
       supabase.from('staff_locations').select('location_id').eq('user_id', userId),
+      supabase.from('user_page_access').select('page, allowed').eq('user_id', userId),
     ])
     setRoles((roleRows ?? []).map((r) => r.role as AppRole))
     setLocationIds((locRows ?? []).map((l) => l.location_id as string))
+    setPageAccess(Object.fromEntries((accessRows ?? []).map((r) => [(r as UserPageAccess).page, (r as UserPageAccess).allowed])))
     setLoading(false)
   }
 
@@ -56,13 +62,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     await supabase.auth.signOut()
   }
 
+  const isDentist = roles.includes('dentist')
   const value: AuthContextValue = {
     session,
     loading,
     roles,
     locationIds,
-    isDentist: roles.includes('dentist'),
+    isDentist,
     isFrontDesk: roles.includes('front_desk'),
+    canAccess: (page) => isDentist || (pageAccess[page] ?? DEFAULT_PAGE_ACCESS[page]),
     signOut,
   }
 

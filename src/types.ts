@@ -19,6 +19,50 @@ export interface Provider {
   specialty: string | null
   license_number: string | null
   active: boolean
+  user_id: string | null
+}
+
+/** The app's distinct sections, for per-person page-level access control. */
+export type PageKey = 'dashboard' | 'patients' | 'schedule' | 'finances' | 'hr' | 'analytics' | 'inventory' | 'settings'
+
+export const PAGE_LABELS: Record<PageKey, string> = {
+  dashboard: 'Dashboard',
+  patients: 'Patients',
+  schedule: 'Schedule',
+  finances: 'Finances',
+  hr: 'HR',
+  analytics: 'Analytics',
+  inventory: 'Inventory',
+  settings: 'Settings',
+}
+
+/** What a page defaults to when nobody has set an explicit override for that
+ * person yet — matches what the app already showed non-dentist staff before
+ * per-person access control existed, so switching this on doesn't silently
+ * change anyone's access. The dentist role always has full access and never
+ * consults this at all (owner access can't be revoked by this mechanism). */
+export const DEFAULT_PAGE_ACCESS: Record<PageKey, boolean> = {
+  dashboard: true,
+  patients: true,
+  schedule: true,
+  finances: false,
+  hr: false,
+  analytics: false,
+  inventory: true,
+  settings: false,
+}
+
+export interface UserPageAccess {
+  user_id: string
+  page: PageKey
+  allowed: boolean
+}
+
+export interface Profile {
+  id: string
+  full_name: string | null
+  email: string | null
+  username: string | null
 }
 
 export function providerFullName(p: Pick<Provider, 'first_name' | 'last_name'>): string {

@@ -1172,3 +1172,57 @@ create policy "staff can clock out for today" on public.employee_attendance for 
 -- row always shows; a retired one shows only if it has a real count/history
 -- entry for that exact period.
 alter table public.inventory_clusters add column if not exists active boolean not null default true;
+
+-- Username login + unified team management + page-level access control
+-- (2026-09-15). Staff type a short username instead of an email address;
+-- Supabase Auth itself is still email-based under the hood, so every
+-- account keeps a real email (just not one anyone needs to remember).
+-- The owner (dentist role) got a real `employees` row too so attendance
+-- clock-in/out works the same way for them as for everyone else — HR's
+-- "Team" tab now lists the owner, employees and providers together.
+alter table public.profiles add column if not exists username text;
+create unique index if not exists profiles_username_lower_uidx on public.profiles (lower(username)) where username is not null;
+
+-- Callable by a NOT-YET-logged-in browser (the login form itself), so it must
+-- be narrowly scoped: given a username, return only that one matching email
+-- (or null). security definer so it can read profiles despite the caller
+-- having no session yet (profiles' own RLS would otherwise block an
+-- anonymous read).
+create or replace function public.get_email_for_username(p_username text)
+returns text
+language sql
+security definer
+set search_path = public
+as $$
+  select email from public.profiles where lower(username) = lower(trim(p_username)) limit 1;
+$$;
+grant execute on function public.get_email_for_username(text) to anon, authenticated;
+
+-- Page-level access control. No row for a (user, page) pair falls back to the
+-- app's built-in default for that page (matches what the nav already showed
+-- non-dentist staff before this feature existed, so nobody's access silently
+-- changed on rollout — see DEFAULT_PAGE_ACCESS in src/types.ts). The dentist
+-- role always has full access and never consults this table at all.
+create table public.user_page_access (
+  user_id uuid not null references auth.users(id) on delete cascade,
+  page text not null,
+  allowed boolean not null default true,
+  updated_at timestamptz not null default now(),
+  primary key (user_id, page)
+);
+alter table public.user_page_access enable row level security;
+create policy "dentist manages page access" on public.user_page_access for all
+  using (public.has_role(auth.uid(), 'dentist')) with check (public.has_role(auth.uid(), 'dentist'));
+create policy "user can view own page access" on public.user_page_access for select
+  using (user_id = auth.uid());
+
+-- Referential integrity for providers.user_id (documenting/ensuring the same
+-- link pattern employees.user_id already has — the mirror's "known drift"
+-- note above already flagged employees.user_id as missing from this file).
+alter table public.providers add column if not exists user_id uuid references auth.users(id) on delete set null;
+
+-- The admin-create-user edge function (deployed outside this file, source
+-- kept in the Supabase dashboard) was extended in lockstep with this
+-- migration: it now accepts an `action` of 'create_user' (as before, plus a
+-- required `username`) or 'update_user' (set a new username and/or reset an
+-- existing user's password) — both still owner-gated the same way.

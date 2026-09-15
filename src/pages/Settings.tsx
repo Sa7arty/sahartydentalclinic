@@ -2,7 +2,7 @@ import { ChangeEvent, FormEvent, useEffect, useRef, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../context/AuthContext'
 import { useSettings } from '../context/SettingsContext'
-import { Provider, PatientGroup, ProcedureCategory, Procedure, ExpenseCategory, ExpenseItem, providerFullName, REQUIRABLE_PATIENT_FIELDS, DENTAL_SPECIALTIES, ChartScope, CHART_SCOPE_LABELS, DiagnosisConditionDef, PaintType, PAINT_TYPE_LABELS } from '../types'
+import { PatientGroup, ProcedureCategory, Procedure, ExpenseCategory, ExpenseItem, REQUIRABLE_PATIENT_FIELDS, ChartScope, CHART_SCOPE_LABELS, DiagnosisConditionDef, PaintType, PAINT_TYPE_LABELS } from '../types'
 import { WORLD_COUNTRIES } from '../data/countries'
 import { WEEKDAY_NAMES_FROM } from '../lib/dates'
 import { exportPatientsCsv, downloadPatientImportTemplate, importPatientsFromCsv } from '../lib/csv'
@@ -10,35 +10,25 @@ import { exportPatientsCsv, downloadPatientImportTemplate, importPatientsFromCsv
 const DURATION_OPTIONS = [15, 20, 30, 45, 60, 75, 90, 120]
 const WEEKDAY_FULL_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
 
-type Category = 'patients' | 'calendar' | 'providers' | 'procedures' | 'price-list' | 'financial' | 'attendance' | 'team' | 'backup' | 'errors'
+type Category = 'patients' | 'calendar' | 'procedures' | 'price-list' | 'financial' | 'attendance' | 'backup' | 'errors'
 
 const CATEGORIES: { key: Category; label: string }[] = [
   { key: 'patients', label: 'Patients' },
   { key: 'calendar', label: 'Calendar & scheduling' },
-  { key: 'providers', label: 'Providers' },
   { key: 'procedures', label: 'Procedures & conditions' },
   { key: 'price-list', label: 'Price list' },
   { key: 'financial', label: 'Financial' },
   { key: 'attendance', label: 'Attendance' },
-  { key: 'team', label: 'Team & access' },
   { key: 'backup', label: 'Backup & import' },
   { key: 'errors', label: 'Error log' },
 ]
 
 const DIAGNOSIS_SCOPE_OPTIONS: ChartScope[] = Object.keys(CHART_SCOPE_LABELS) as ChartScope[]
 
-const TEAM_ROLES: { value: string; label: string }[] = [
-  { value: 'receptionist', label: 'Receptionist' },
-  { value: 'assistant', label: 'Assistant' },
-  { value: 'provider', label: 'Provider (dentist)' },
-  { value: 'dentist', label: 'Owner (full access)' },
-]
-type TeamMember = { id: string; full_name: string | null; email: string | null; roles: string[] }
-
 const card = 'space-y-3 rounded-xl border border-slate-200 bg-white p-4'
 
 export default function Settings() {
-  const { isDentist, session } = useAuth()
+  const { isDentist, session, canAccess } = useAuth()
   const { settings, refresh } = useSettings()
   const [category, setCategory] = useState<Category>('patients')
 
@@ -59,10 +49,6 @@ export default function Settings() {
   const [visitProviderRequired, setVisitProviderRequired] = useState(settings.visit_provider_required)
   const [savingCalendar, setSavingCalendar] = useState(false)
 
-  const [providers, setProviders] = useState<Provider[]>([])
-  const [editingProviderId, setEditingProviderId] = useState<string | null>(null)
-  const [showAddProvider, setShowAddProvider] = useState(false)
-
   const [groups, setGroups] = useState<PatientGroup[]>([])
   const [newGroupName, setNewGroupName] = useState('')
 
@@ -77,10 +63,6 @@ export default function Settings() {
   const [newExpenseCategory, setNewExpenseCategory] = useState('')
   const [expenseItems, setExpenseItems] = useState<ExpenseItem[]>([])
   const [newExpenseItem, setNewExpenseItem] = useState<Record<string, string>>({})
-
-  const [team, setTeam] = useState<TeamMember[]>([])
-  const [addingMember, setAddingMember] = useState(false)
-  const [memberMsg, setMemberMsg] = useState<string | null>(null)
 
   const [procCategories, setProcCategories] = useState<ProcedureCategory[]>([])
   const [newProcCategory, setNewProcCategory] = useState('')
@@ -146,14 +128,12 @@ export default function Settings() {
 
   useEffect(() => {
     loadPreview()
-    loadProviders()
     loadGroups()
     loadConditions()
     loadProcedureCategories()
     loadProcedures()
     loadDiagnosisConditions()
     loadExpenseCategories()
-    loadTeam()
     loadErrorLogs()
   }, [])
 
@@ -170,56 +150,9 @@ export default function Settings() {
     setLoadingErrorLogs(false)
   }
 
-  async function loadTeam() {
-    const [{ data: profs }, { data: roleRows }] = await Promise.all([
-      supabase.from('profiles').select('id, full_name, email'),
-      supabase.from('user_roles').select('user_id, role'),
-    ])
-    const rolesByUser: Record<string, string[]> = {}
-    for (const r of (roleRows ?? []) as { user_id: string; role: string }[]) (rolesByUser[r.user_id] = rolesByUser[r.user_id] ?? []).push(r.role)
-    setTeam(((profs ?? []) as { id: string; full_name: string | null; email: string | null }[]).map((p) => ({ ...p, roles: rolesByUser[p.id] ?? [] })))
-  }
-
-  async function handleAddMember(e: FormEvent<HTMLFormElement>) {
-    e.preventDefault()
-    const f = new FormData(e.currentTarget)
-    const role = f.get('role') as string
-    setAddingMember(true)
-    setMemberMsg(null)
-    const { data, error } = await supabase.functions.invoke('admin-create-user', {
-      body: {
-        full_name: f.get('full_name'),
-        email: f.get('email'),
-        password: f.get('password'),
-        role,
-        provider_id: role === 'provider' ? f.get('provider_id') || null : null,
-      },
-    })
-    setAddingMember(false)
-    if (error || (data && (data as { error?: string }).error)) {
-      setMemberMsg(`⚠ ${(data as { error?: string })?.error ?? error?.message ?? 'Could not add member'}`)
-      return
-    }
-    setMemberMsg('✓ Team member added. Share the email + temporary password with them; they can change it after signing in.')
-    ;(e.target as HTMLFormElement).reset()
-    loadTeam()
-  }
-
-  async function handleSetRole(userId: string, role: string) {
-    // Replace the member's role with the chosen one (single-role model for now).
-    await supabase.from('user_roles').delete().eq('user_id', userId)
-    const { error } = await supabase.from('user_roles').insert({ user_id: userId, role })
-    if (error) alert(error.message)
-    else loadTeam()
-  }
-
   async function loadPreview() {
     const { data } = await supabase.rpc('peek_next_patient_file_number')
     if (typeof data === 'string') setNextPreview(data)
-  }
-  async function loadProviders() {
-    const { data } = await supabase.from('providers').select('*').order('first_name')
-    setProviders(data ?? [])
   }
   async function loadGroups() {
     const { data } = await supabase.from('patient_groups').select('*').order('name')
@@ -498,25 +431,6 @@ export default function Settings() {
       await loadPreview()
     }
   }
-  async function handleSaveProvider(payload: Record<string, unknown>, id?: string) {
-    const { error } = id ? await supabase.from('providers').update(payload).eq('id', id) : await supabase.from('providers').insert(payload)
-    if (error) {
-      alert(error.message)
-      return
-    }
-    setEditingProviderId(null)
-    setShowAddProvider(false)
-    loadProviders()
-  }
-  async function handleDeleteProvider(id: string) {
-    if (!confirm('Delete this provider? Patients and visits assigned to them will keep their history but show no provider.')) return
-    const { error } = await supabase.from('providers').delete().eq('id', id)
-    if (error) alert(error.message)
-    else {
-      setEditingProviderId(null)
-      loadProviders()
-    }
-  }
   async function handleExportCsv() {
     // Supabase caps a single request at 1000 rows — page through in batches so no patients are silently dropped.
     const step = 1000
@@ -548,8 +462,8 @@ export default function Settings() {
     setImporting(false)
   }
 
-  if (!isDentist) {
-    return <p className="text-sm text-slate-500">Settings are visible to dentists only.</p>
+  if (!canAccess('settings')) {
+    return <p className="text-sm text-slate-500">You don't have access to Settings.</p>
   }
 
   return (
@@ -743,53 +657,6 @@ export default function Settings() {
         </form>
       )}
 
-      {category === 'providers' && (
-        <div className={card}>
-          <div className="flex items-center justify-between">
-            <div>
-              <h2 className="font-medium text-navy-900">Providers (doctors)</h2>
-              <p className="text-sm text-slate-500">Uncheck "Active" to hide a provider from new patients without deleting their history.</p>
-            </div>
-            <button
-              onClick={() => {
-                setShowAddProvider((s) => !s)
-                setEditingProviderId(null)
-              }}
-              className="shrink-0 rounded-lg border border-slate-300 px-3 py-1.5 text-sm text-navy-800 hover:bg-slate-50"
-            >
-              {showAddProvider ? 'Cancel' : '+ Add provider'}
-            </button>
-          </div>
-          {showAddProvider && <ProviderFields onSave={(payload) => handleSaveProvider(payload)} onCancel={() => setShowAddProvider(false)} />}
-          <div className="divide-y divide-slate-100">
-            {providers.length === 0 && !showAddProvider && <p className="py-2 text-sm text-slate-500">No providers yet — add one above.</p>}
-            {providers.map((p) =>
-              editingProviderId === p.id ? (
-                <div key={p.id} className="py-3">
-                  <ProviderFields provider={p} onSave={(payload) => handleSaveProvider(payload, p.id)} onCancel={() => setEditingProviderId(null)} />
-                </div>
-              ) : (
-                <div key={p.id} className="flex items-center justify-between gap-3 py-3">
-                  <div>
-                    <p className="font-medium text-navy-900">
-                      {providerFullName(p)} {!p.active && <span className="text-xs font-normal text-slate-400">(inactive)</span>}
-                    </p>
-                    <p className="text-xs text-slate-500">{[p.specialty, p.email, p.phone].filter(Boolean).join(' · ') || '—'}</p>
-                  </div>
-                  <div className="flex shrink-0 gap-3">
-                    <button onClick={() => setEditingProviderId(p.id)} className="text-sm font-medium text-navy-700 hover:underline">
-                      Edit
-                    </button>
-                    <button onClick={() => handleDeleteProvider(p.id)} className="text-sm text-red-600 hover:underline">
-                      Delete
-                    </button>
-                  </div>
-                </div>
-              ),
-            )}
-          </div>
-        </div>
-      )}
 
       {category === 'procedures' && (
         <div className="space-y-4">
@@ -1252,74 +1119,6 @@ export default function Settings() {
         </div>
       )}
 
-      {category === 'team' && (
-        <div className="space-y-4">
-          <form onSubmit={handleAddMember} className={card}>
-            <div>
-              <h2 className="font-medium text-navy-900">Add a team member</h2>
-              <p className="text-sm text-slate-500">Create a login for a staff member or provider. You set a temporary password; they can change it after they sign in.</p>
-            </div>
-            <div className="grid gap-3 sm:grid-cols-2">
-              <input name="full_name" required placeholder="Full name" className="rounded-lg border border-slate-300 px-3 py-2 text-sm" />
-              <input name="email" type="email" required placeholder="Email (their login)" className="rounded-lg border border-slate-300 px-3 py-2 text-sm" />
-              <input name="password" required minLength={6} placeholder="Temporary password (min 6 chars)" className="rounded-lg border border-slate-300 px-3 py-2 text-sm" />
-              <select name="role" defaultValue="receptionist" className="rounded-lg border border-slate-300 px-3 py-2 text-sm">
-                {TEAM_ROLES.map((r) => (
-                  <option key={r.value} value={r.value}>
-                    {r.label}
-                  </option>
-                ))}
-              </select>
-              <select name="provider_id" defaultValue="" className="rounded-lg border border-slate-300 px-3 py-2 text-sm sm:col-span-2">
-                <option value="">Link to a provider record (only for the Provider role)</option>
-                {providers.map((pr) => (
-                  <option key={pr.id} value={pr.id}>
-                    {providerFullName(pr)}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <button type="submit" disabled={addingMember} className="rounded-lg bg-navy-900 px-4 py-2 text-sm font-medium text-white hover:bg-navy-800 disabled:opacity-50">
-              {addingMember ? 'Adding…' : 'Add member'}
-            </button>
-            {memberMsg && <p className={`text-sm ${memberMsg.startsWith('✓') ? 'text-green-700' : 'text-red-600'}`}>{memberMsg}</p>}
-            <p className="text-[11px] text-slate-400">
-              A <span className="font-medium">Provider</span> account sees only their own appointments and the finances of patients whose main provider is them. Receptionist/Assistant have limited access; the Owner sees everything.
-            </p>
-          </form>
-
-          <div className={card}>
-            <h2 className="font-medium text-navy-900">Team members</h2>
-            {team.length === 0 && <p className="text-sm text-slate-500">No members yet.</p>}
-            <div className="divide-y divide-slate-100">
-              {team.map((m) => (
-                <div key={m.id} className="flex flex-wrap items-center justify-between gap-2 py-2">
-                  <div className="min-w-0">
-                    <p className="font-medium text-navy-900">{m.full_name || m.email || 'Unnamed'}</p>
-                    <p className="text-xs text-slate-400">{m.email}</p>
-                  </div>
-                  <select
-                    value={m.roles[0] ?? ''}
-                    onChange={(e) => handleSetRole(m.id, e.target.value)}
-                    disabled={m.id === session?.user.id}
-                    title={m.id === session?.user.id ? "You can't change your own role" : 'Change role'}
-                    className="rounded-lg border border-slate-300 px-2 py-1.5 text-sm disabled:opacity-50"
-                  >
-                    <option value="" disabled>
-                      No role
-                    </option>
-                    {TEAM_ROLES.map((r) => (
-                      <option key={r.value} value={r.value}>
-                        {r.label}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-      )}
 
       {category === 'backup' && (
         <div className={card}>
@@ -1430,50 +1229,6 @@ function MandatoryFieldsDropdown({ selected, onChange }: { selected: string[]; o
   )
 }
 
-function ProviderFields({ provider, onSave, onCancel }: { provider?: Provider; onSave: (payload: Record<string, unknown>) => void; onCancel: () => void }) {
-  function handleSubmit(e: FormEvent<HTMLFormElement>) {
-    e.preventDefault()
-    const form = new FormData(e.currentTarget)
-    onSave({
-      first_name: form.get('first_name'),
-      last_name: form.get('last_name'),
-      email: form.get('email') || null,
-      phone: form.get('phone') || null,
-      specialty: form.get('specialty') || null,
-      license_number: form.get('license_number') || null,
-      active: form.get('active') === 'on',
-    })
-  }
-  return (
-    <form onSubmit={handleSubmit} className="grid gap-2 rounded-lg border border-slate-200 p-3 sm:grid-cols-2">
-      <input name="first_name" required defaultValue={provider?.first_name ?? ''} placeholder="First name" className="rounded-lg border border-slate-300 px-3 py-2 text-sm" />
-      <input name="last_name" required defaultValue={provider?.last_name ?? ''} placeholder="Last name" className="rounded-lg border border-slate-300 px-3 py-2 text-sm" />
-      <select name="specialty" defaultValue={provider?.specialty ?? ''} className="rounded-lg border border-slate-300 px-3 py-2 text-sm">
-        <option value="">Specialty…</option>
-        {DENTAL_SPECIALTIES.map((s) => (
-          <option key={s} value={s}>
-            {s}
-          </option>
-        ))}
-      </select>
-      <input name="license_number" defaultValue={provider?.license_number ?? ''} placeholder="License / syndicate number" className="rounded-lg border border-slate-300 px-3 py-2 text-sm" />
-      <input name="email" type="email" defaultValue={provider?.email ?? ''} placeholder="Email" className="rounded-lg border border-slate-300 px-3 py-2 text-sm" />
-      <input name="phone" defaultValue={provider?.phone ?? ''} placeholder="Phone" className="rounded-lg border border-slate-300 px-3 py-2 text-sm" />
-      <label className="flex items-center gap-2 text-sm text-navy-800 sm:col-span-2">
-        <input type="checkbox" name="active" defaultChecked={provider?.active ?? true} />
-        Active
-      </label>
-      <div className="flex gap-2 sm:col-span-2">
-        <button type="submit" className="rounded-lg bg-navy-900 px-4 py-2 text-sm font-medium text-white hover:bg-navy-800">
-          Save
-        </button>
-        <button type="button" onClick={onCancel} className="rounded-lg border border-slate-300 px-4 py-2 text-sm text-navy-800 hover:bg-slate-50">
-          Cancel
-        </button>
-      </div>
-    </form>
-  )
-}
 
 function ProcedureFields({
   procedure,

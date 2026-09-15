@@ -5,7 +5,7 @@ import { useAuth } from '../context/AuthContext'
 
 export default function Login() {
   const { session } = useAuth()
-  const [email, setEmail] = useState('')
+  const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
@@ -16,9 +16,17 @@ export default function Login() {
     e.preventDefault()
     setError(null)
     setSubmitting(true)
+    // Usernames aren't a native Supabase Auth concept — resolve to the real
+    // email behind the scenes first, then sign in as usual.
+    const { data: email, error: lookupErr } = await supabase.rpc('get_email_for_username', { p_username: username })
+    if (lookupErr || !email) {
+      setSubmitting(false)
+      setError('Incorrect username or password.')
+      return
+    }
     const { error } = await supabase.auth.signInWithPassword({ email, password })
     setSubmitting(false)
-    if (error) setError(error.message)
+    if (error) setError('Incorrect username or password.')
   }
 
   return (
@@ -29,12 +37,14 @@ export default function Login() {
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
-            <label className="mb-1 block text-sm text-slate-300">Email</label>
+            <label className="mb-1 block text-sm text-slate-300">Username</label>
             <input
-              type="email"
+              type="text"
+              autoCapitalize="none"
+              autoCorrect="off"
               required
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
               className="w-full rounded-lg border border-navy-700 bg-navy-800 px-3 py-2 text-white focus:border-gold-500 focus:outline-none focus:ring-1 focus:ring-gold-500"
             />
           </div>

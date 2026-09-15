@@ -6,7 +6,7 @@ const navItem = 'block rounded-lg px-4 py-2 text-sm font-medium transition-color
 const navItemActive = 'bg-navy-800 text-gold-400'
 
 export default function Layout() {
-  const { signOut, isDentist } = useAuth()
+  const { signOut, canAccess } = useAuth()
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem('sidebar-collapsed') === '1')
 
   function toggle() {
@@ -31,34 +31,42 @@ export default function Layout() {
             </button>
           </div>
           <nav className="flex flex-row gap-1 md:flex-col">
-            <NavLink to="/" end className={({ isActive }) => `${navItem} ${isActive ? navItemActive : 'text-slate-200'}`}>
-              Dashboard
-            </NavLink>
-            <NavLink to="/patients" className={({ isActive }) => `${navItem} ${isActive ? navItemActive : 'text-slate-200'}`}>
-              Patients
-            </NavLink>
-            <NavLink to="/schedule" className={({ isActive }) => `${navItem} ${isActive ? navItemActive : 'text-slate-200'}`}>
-              Schedule
-            </NavLink>
-            <NavLink to="/inventory" className={({ isActive }) => `${navItem} ${isActive ? navItemActive : 'text-slate-200'}`}>
-              Inventory
-            </NavLink>
-            {isDentist && (
+            {canAccess('dashboard') && (
+              <NavLink to="/" end className={({ isActive }) => `${navItem} ${isActive ? navItemActive : 'text-slate-200'}`}>
+                Dashboard
+              </NavLink>
+            )}
+            {canAccess('patients') && (
+              <NavLink to="/patients" className={({ isActive }) => `${navItem} ${isActive ? navItemActive : 'text-slate-200'}`}>
+                Patients
+              </NavLink>
+            )}
+            {canAccess('schedule') && (
+              <NavLink to="/schedule" className={({ isActive }) => `${navItem} ${isActive ? navItemActive : 'text-slate-200'}`}>
+                Schedule
+              </NavLink>
+            )}
+            {canAccess('inventory') && (
+              <NavLink to="/inventory" className={({ isActive }) => `${navItem} ${isActive ? navItemActive : 'text-slate-200'}`}>
+                Inventory
+              </NavLink>
+            )}
+            {canAccess('finances') && (
               <NavLink to="/finances" className={({ isActive }) => `${navItem} ${isActive ? navItemActive : 'text-slate-200'}`}>
                 Finances
               </NavLink>
             )}
-            {isDentist && (
+            {canAccess('hr') && (
               <NavLink to="/hr" className={({ isActive }) => `${navItem} ${isActive ? navItemActive : 'text-slate-200'}`}>
                 HR
               </NavLink>
             )}
-            {isDentist && (
+            {canAccess('analytics') && (
               <NavLink to="/analytics" className={({ isActive }) => `${navItem} ${isActive ? navItemActive : 'text-slate-200'}`}>
                 Analytics
               </NavLink>
             )}
-            {isDentist && (
+            {canAccess('settings') && (
               <NavLink to="/settings" className={({ isActive }) => `${navItem} ${isActive ? navItemActive : 'text-slate-200'}`}>
                 Settings
               </NavLink>

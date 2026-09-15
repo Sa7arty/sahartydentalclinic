@@ -34,6 +34,12 @@ import {
   EMPLOYEE_POSITIONS,
   formatMoney,
   AppSettings,
+  Provider,
+  providerFullName,
+  DENTAL_SPECIALTIES,
+  PageKey,
+  PAGE_LABELS,
+  DEFAULT_PAGE_ACCESS,
 } from '../types'
 import { formatDate, toYmd } from '../lib/dates'
 import { exportPayslipPdf, exportStaffSummaryPdf } from '../lib/pdf'
@@ -41,6 +47,14 @@ import { exportPayslipPdf, exportStaffSummaryPdf } from '../lib/pdf'
 type HrTab = 'employees' | 'attendance' | 'leave' | 'deductions' | 'payroll' | 'summary'
 
 const card = 'space-y-3 rounded-xl border border-slate-200 bg-white p-4'
+
+const TEAM_ROLES: { value: string; label: string }[] = [
+  { value: 'receptionist', label: 'Receptionist' },
+  { value: 'assistant', label: 'Assistant' },
+  { value: 'provider', label: 'Provider (dentist)' },
+  { value: 'front_desk', label: 'Front desk' },
+  { value: 'dentist', label: 'Owner (full access)' },
+]
 
 // Supabase caps a single request at 1000 rows. Page through in 1000-row batches so
 // the profit-share pool (payments/expenses/misc income for a period) is never undercounted.
@@ -61,14 +75,16 @@ async function fetchAllRows<T>(buildQuery: () => any): Promise<T[]> {
 }
 
 export default function HR() {
-  const { isDentist } = useAuth()
+  const { isDentist, canAccess } = useAuth()
   const { settings } = useSettings()
   const [tab, setTab] = useState<HrTab>('employees')
   const [employees, setEmployees] = useState<Employee[]>([])
+  const [providers, setProviders] = useState<Provider[]>([])
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
     loadEmployees()
+    loadProviders()
   }, [])
 
   async function loadEmployees() {
@@ -78,10 +94,15 @@ export default function HR() {
     setLoading(false)
   }
 
-  if (!isDentist) return <p className="text-sm text-slate-500">Human resources is available to dentists only.</p>
+  async function loadProviders() {
+    const { data } = await supabase.from('providers').select('*').order('first_name')
+    setProviders((data as Provider[]) ?? [])
+  }
+
+  if (!canAccess('hr')) return <p className="text-sm text-slate-500">You don't have access to HR.</p>
 
   const tabs: { key: HrTab; label: string }[] = [
-    { key: 'employees', label: 'Employees' },
+    { key: 'employees', label: 'Team' },
     { key: 'attendance', label: 'Attendance' },
     { key: 'leave', label: 'Leave' },
     { key: 'deductions', label: 'Deductions & loans' },
@@ -110,7 +131,7 @@ export default function HR() {
       {loading ? (
         <p className="text-slate-500">Loading…</p>
       ) : tab === 'employees' ? (
-        <EmployeesTab employees={employees} settings={settings} onChanged={loadEmployees} />
+        <EmployeesTab employees={employees} providers={providers} settings={settings} onEmployeesChanged={loadEmployees} onProvidersChanged={loadProviders} />
       ) : tab === 'attendance' ? (
         <AttendanceTab employees={employees} settings={settings} />
       ) : tab === 'leave' ? (
@@ -129,17 +150,27 @@ export default function HR() {
 // ============================================================
 // Employees tab
 // ============================================================
-function EmployeesTab({ employees, settings, onChanged }: { employees: Employee[]; settings: AppSettings; onChanged: () => void }) {
+function EmployeesTab({
+  employees,
+  providers,
+  settings,
+  onEmployeesChanged,
+  onProvidersChanged,
+}: {
+  employees: Employee[]
+  providers: Provider[]
+  settings: AppSettings
+  onEmployeesChanged: () => void
+  onProvidersChanged: () => void
+}) {
   const { session } = useAuth()
   const [showAdd, setShowAdd] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
+  const [showAddProvider, setShowAddProvider] = useState(false)
+  const [editingProviderId, setEditingProviderId] = useState<string | null>(null)
+  const [accessOpenFor, setAccessOpenFor] = useState<string | null>(null)
 
-  async function handleSave(
-    payload: Record<string, unknown>,
-    file: File | null,
-    id?: string,
-    login?: { email: string; password: string; role: string } | null,
-  ) {
+  async function handleSave(payload: Record<string, unknown>, file: File | null, id?: string) {
     let employeeId = id
     if (id) {
       const { error } = await supabase.from('employees').update({ ...payload, updated_by: session?.user.id, updated_at: new Date().toISOString() }).eq('id', id)
@@ -148,15 +179,6 @@ function EmployeesTab({ employees, settings, onChanged }: { employees: Employee[
       const { data, error } = await supabase.from('employees').insert({ ...payload, created_by: session?.user.id }).select('id').single()
       if (error) return alert(error.message)
       employeeId = data.id
-    }
-    // Optionally create a login account for this employee (owner-gated edge function) and link it.
-    if (login && employeeId) {
-      const { data: res, error: fnErr } = await supabase.functions.invoke('admin-create-user', {
-        body: { full_name: `${payload.first_name ?? ''} ${payload.last_name ?? ''}`.trim(), email: login.email, password: login.password, role: login.role },
-      })
-      const errMsg = fnErr?.message || (res as { error?: string })?.error
-      if (errMsg) alert(`Employee saved, but the login could not be created: ${errMsg}`)
-      else if ((res as { user_id?: string })?.user_id) await supabase.from('employees').update({ user_id: (res as { user_id: string }).user_id }).eq('id', employeeId)
     }
     if (file && employeeId) {
       const ext = file.name.split('.').pop() || 'jpg'
@@ -167,81 +189,410 @@ function EmployeesTab({ employees, settings, onChanged }: { employees: Employee[
     }
     setShowAdd(false)
     setEditingId(null)
-    onChanged()
+    onEmployeesChanged()
   }
 
   async function handleDelete(id: string) {
     if (!confirm('Delete this employee and all their attendance records? This cannot be undone.')) return
     const { error } = await supabase.from('employees').delete().eq('id', id)
     if (error) alert(error.message)
-    else onChanged()
+    else onEmployeesChanged()
+  }
+
+  async function handleSaveProvider(payload: Record<string, unknown>, id?: string) {
+    const { error } = id ? await supabase.from('providers').update(payload).eq('id', id) : await supabase.from('providers').insert(payload)
+    if (error) return alert(error.message)
+    setShowAddProvider(false)
+    setEditingProviderId(null)
+    onProvidersChanged()
+  }
+
+  async function handleDeleteProvider(id: string) {
+    if (!confirm('Delete this provider? Their history (visits, treatments) stays, just no longer linked to an active provider.')) return
+    const { error } = await supabase.from('providers').delete().eq('id', id)
+    if (error) alert(error.message)
+    else onProvidersChanged()
   }
 
   return (
-    <div className={card}>
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="font-medium text-navy-900">Staff</h2>
-          <p className="text-sm text-slate-500">Receptionists, dental assistants and other team members (providers/doctors are managed under Settings).</p>
+    <div className="space-y-4">
+      <div className={card}>
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="font-medium text-navy-900">Staff</h2>
+            <p className="text-sm text-slate-500">Everyone on the clinic's payroll — the owner, receptionists, dental assistants and other team members.</p>
+          </div>
+          <button
+            onClick={() => {
+              setShowAdd((s) => !s)
+              setEditingId(null)
+            }}
+            className="shrink-0 rounded-lg border border-slate-300 px-3 py-1.5 text-sm text-navy-800 hover:bg-slate-50"
+          >
+            {showAdd ? 'Cancel' : '+ Add employee'}
+          </button>
         </div>
-        <button
-          onClick={() => {
-            setShowAdd((s) => !s)
-            setEditingId(null)
-          }}
-          className="shrink-0 rounded-lg border border-slate-300 px-3 py-1.5 text-sm text-navy-800 hover:bg-slate-50"
-        >
-          {showAdd ? 'Cancel' : '+ Add employee'}
-        </button>
+
+        {showAdd && <EmployeeForm settings={settings} onSave={(p, f) => handleSave(p, f, undefined)} onCancel={() => setShowAdd(false)} />}
+
+        <div className="divide-y divide-slate-100">
+          {employees.length === 0 && !showAdd && <p className="py-2 text-sm text-slate-500">No employees yet — add one above.</p>}
+          {employees.map((e) =>
+            editingId === e.id ? (
+              <div key={e.id} className="py-3">
+                <EmployeeForm employee={e} settings={settings} onSave={(p, f) => handleSave(p, f, e.id)} onCancel={() => setEditingId(null)} />
+              </div>
+            ) : (
+              <div key={e.id} className="py-3">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="flex flex-wrap items-center gap-1.5 font-medium text-navy-900">
+                      {employeeFullName(e)} {!e.active && <span className="text-xs font-normal text-slate-400">(inactive)</span>}
+                      <ExpiryBadge label="Last day" date={e.last_working_day} />
+                      <ExpiryBadge label="ID" date={e.national_id_expiry} />
+                      {e.user_id ? (
+                        <span className="rounded-full bg-green-100 px-1.5 py-0.5 text-[10px] font-semibold text-green-700">Has login</span>
+                      ) : (
+                        <span className="rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold text-slate-500">No login yet</span>
+                      )}
+                    </p>
+                    <p className="text-xs text-slate-500">
+                      {[
+                        e.position,
+                        `${formatMoney(Number(e.base_salary), settings)}/mo`,
+                        e.shift_start && e.shift_end ? `${e.shift_start.slice(0, 5)}–${e.shift_end.slice(0, 5)}` : 'flexible',
+                        e.hire_date ? `since ${formatDate(e.hire_date)}` : null,
+                      ]
+                        .filter(Boolean)
+                        .join(' · ')}
+                    </p>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-3">
+                    {e.national_id_file_path && <ViewIdButton path={e.national_id_file_path} />}
+                    <button onClick={() => setAccessOpenFor(accessOpenFor === e.id ? null : e.id)} className="text-sm font-medium text-navy-700 hover:underline">
+                      {accessOpenFor === e.id ? 'Hide login & access' : 'Login & access'}
+                    </button>
+                    <button onClick={() => setEditingId(e.id)} className="text-sm font-medium text-navy-700 hover:underline">
+                      Edit
+                    </button>
+                    <button onClick={() => handleDelete(e.id)} className="text-sm text-red-600 hover:underline">
+                      Delete
+                    </button>
+                  </div>
+                </div>
+                {accessOpenFor === e.id && (
+                  <LoginAccessPanel
+                    personName={employeeFullName(e)}
+                    personEmail={e.email}
+                    userId={e.user_id}
+                    defaultRole={e.position === 'Owner' ? 'dentist' : 'assistant'}
+                    onLinked={async (uid) => {
+                      await supabase.from('employees').update({ user_id: uid }).eq('id', e.id)
+                      onEmployeesChanged()
+                    }}
+                  />
+                )}
+              </div>
+            ),
+          )}
+        </div>
       </div>
 
-      {showAdd && <EmployeeForm settings={settings} onSave={(p, f, login) => handleSave(p, f, undefined, login)} onCancel={() => setShowAdd(false)} />}
-
-      <div className="divide-y divide-slate-100">
-        {employees.length === 0 && !showAdd && <p className="py-2 text-sm text-slate-500">No employees yet — add one above.</p>}
-        {employees.map((e) =>
-          editingId === e.id ? (
-            <div key={e.id} className="py-3">
-              <EmployeeForm employee={e} settings={settings} onSave={(p, f, login) => handleSave(p, f, e.id, login)} onCancel={() => setEditingId(null)} />
-            </div>
-          ) : (
-            <div key={e.id} className="flex items-center justify-between gap-3 py-3">
-              <div className="min-w-0">
-                <p className="flex flex-wrap items-center gap-1.5 font-medium text-navy-900">
-                  {employeeFullName(e)} {!e.active && <span className="text-xs font-normal text-slate-400">(inactive)</span>}
-                  <ExpiryBadge label="Last day" date={e.last_working_day} />
-                  <ExpiryBadge label="ID" date={e.national_id_expiry} />
-                  {e.user_id ? (
-                    <span className="rounded-full bg-green-100 px-1.5 py-0.5 text-[10px] font-semibold text-green-700">Has login</span>
-                  ) : (
-                    <span className="rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold text-slate-500">No login yet</span>
-                  )}
-                </p>
-                <p className="text-xs text-slate-500">
-                  {[
-                    e.position,
-                    `${formatMoney(Number(e.base_salary), settings)}/mo`,
-                    e.shift_start && e.shift_end ? `${e.shift_start.slice(0, 5)}–${e.shift_end.slice(0, 5)}` : 'flexible',
-                    e.hire_date ? `since ${formatDate(e.hire_date)}` : null,
-                  ]
-                    .filter(Boolean)
-                    .join(' · ')}
-                </p>
+      <div className={card}>
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="font-medium text-navy-900">Providers (doctors)</h2>
+            <p className="text-sm text-slate-500">Clinical staff who get scheduled for appointments and treat patients.</p>
+          </div>
+          <button
+            onClick={() => {
+              setShowAddProvider((s) => !s)
+              setEditingProviderId(null)
+            }}
+            className="shrink-0 rounded-lg border border-slate-300 px-3 py-1.5 text-sm text-navy-800 hover:bg-slate-50"
+          >
+            {showAddProvider ? 'Cancel' : '+ Add provider'}
+          </button>
+        </div>
+        {showAddProvider && <ProviderFields onSave={(payload) => handleSaveProvider(payload)} onCancel={() => setShowAddProvider(false)} />}
+        <div className="divide-y divide-slate-100">
+          {providers.length === 0 && !showAddProvider && <p className="py-2 text-sm text-slate-500">No providers yet — add one above.</p>}
+          {providers.map((p) =>
+            editingProviderId === p.id ? (
+              <div key={p.id} className="py-3">
+                <ProviderFields provider={p} onSave={(payload) => handleSaveProvider(payload, p.id)} onCancel={() => setEditingProviderId(null)} />
               </div>
-              <div className="flex shrink-0 items-center gap-3">
-                {e.national_id_file_path && <ViewIdButton path={e.national_id_file_path} />}
-                <button onClick={() => setEditingId(e.id)} className="text-sm font-medium text-navy-700 hover:underline">
-                  Edit
-                </button>
-                <button onClick={() => handleDelete(e.id)} className="text-sm text-red-600 hover:underline">
-                  Delete
-                </button>
+            ) : (
+              <div key={p.id} className="py-3">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="flex flex-wrap items-center gap-1.5 font-medium text-navy-900">
+                      {providerFullName(p)} {!p.active && <span className="text-xs font-normal text-slate-400">(inactive)</span>}
+                      {p.user_id ? (
+                        <span className="rounded-full bg-green-100 px-1.5 py-0.5 text-[10px] font-semibold text-green-700">Has login</span>
+                      ) : (
+                        <span className="rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold text-slate-500">No login yet</span>
+                      )}
+                    </p>
+                    <p className="text-xs text-slate-500">{[p.specialty, p.email, p.phone].filter(Boolean).join(' · ') || '—'}</p>
+                  </div>
+                  <div className="flex shrink-0 gap-3">
+                    <button onClick={() => setAccessOpenFor(accessOpenFor === p.id ? null : p.id)} className="text-sm font-medium text-navy-700 hover:underline">
+                      {accessOpenFor === p.id ? 'Hide login & access' : 'Login & access'}
+                    </button>
+                    <button onClick={() => setEditingProviderId(p.id)} className="text-sm font-medium text-navy-700 hover:underline">
+                      Edit
+                    </button>
+                    <button onClick={() => handleDeleteProvider(p.id)} className="text-sm text-red-600 hover:underline">
+                      Delete
+                    </button>
+                  </div>
+                </div>
+                {accessOpenFor === p.id && (
+                  <LoginAccessPanel
+                    personName={providerFullName(p)}
+                    personEmail={p.email}
+                    userId={p.user_id}
+                    defaultRole="provider"
+                    onLinked={async (uid) => {
+                      await supabase.from('providers').update({ user_id: uid }).eq('id', p.id)
+                      onProvidersChanged()
+                    }}
+                  />
+                )}
               </div>
-            </div>
-          ),
-        )}
+            ),
+          )}
+        </div>
       </div>
     </div>
+  )
+}
+
+/** Create a login for someone with no account yet, or manage an existing one:
+ * change their username, reset their password, change their role, and — for
+ * anyone but the owner — toggle which pages they can open. */
+function LoginAccessPanel({
+  personName,
+  personEmail,
+  userId,
+  defaultRole,
+  onLinked,
+}: {
+  personName: string
+  personEmail: string | null
+  userId: string | null
+  defaultRole: string
+  onLinked: (userId: string) => void
+}) {
+  const { session } = useAuth()
+  const [creating, setCreating] = useState(false)
+  const [msg, setMsg] = useState<string | null>(null)
+  const [username, setUsername] = useState('')
+  const [role, setRole] = useState<string | null>(null)
+  const [pageAccess, setPageAccess] = useState<Record<string, boolean> | null>(null)
+  const [savingUsername, setSavingUsername] = useState(false)
+  const [newPassword, setNewPassword] = useState('')
+  const [resettingPw, setResettingPw] = useState(false)
+  const isSelf = userId === session?.user.id
+
+  useEffect(() => {
+    if (userId) loadExisting(userId)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userId])
+
+  async function loadExisting(uid: string) {
+    const [{ data: profile }, { data: roleRows }, { data: accessRows }] = await Promise.all([
+      supabase.from('profiles').select('username').eq('id', uid).maybeSingle(),
+      supabase.from('user_roles').select('role').eq('user_id', uid),
+      supabase.from('user_page_access').select('page, allowed').eq('user_id', uid),
+    ])
+    setUsername((profile as { username: string | null } | null)?.username ?? '')
+    setRole(((roleRows ?? [])[0] as { role: string } | undefined)?.role ?? null)
+    const overrides = Object.fromEntries((accessRows ?? []).map((r) => [(r as { page: string }).page, (r as { allowed: boolean }).allowed]))
+    setPageAccess({ ...DEFAULT_PAGE_ACCESS, ...overrides })
+  }
+
+  async function handleCreateLogin(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault()
+    const f = new FormData(e.currentTarget)
+    setCreating(true)
+    setMsg(null)
+    const { data, error } = await supabase.functions.invoke('admin-create-user', {
+      body: {
+        action: 'create_user',
+        full_name: personName,
+        email: f.get('email'),
+        password: f.get('password'),
+        username: f.get('username'),
+        role: f.get('role'),
+      },
+    })
+    setCreating(false)
+    const errMsg = error?.message || (data as { error?: string })?.error
+    if (errMsg) return setMsg(`⚠ ${errMsg}`)
+    const newId = (data as { user_id: string }).user_id
+    onLinked(newId)
+    setMsg('✓ Login created.')
+  }
+
+  async function handleSaveUsername() {
+    if (!userId) return
+    setSavingUsername(true)
+    const { data, error } = await supabase.functions.invoke('admin-create-user', { body: { action: 'update_user', user_id: userId, username } })
+    setSavingUsername(false)
+    const errMsg = error?.message || (data as { error?: string })?.error
+    setMsg(errMsg ? `⚠ ${errMsg}` : '✓ Username updated.')
+  }
+
+  async function handleResetPassword() {
+    if (!userId || newPassword.length < 6) return setMsg('⚠ New password must be at least 6 characters.')
+    setResettingPw(true)
+    const { data, error } = await supabase.functions.invoke('admin-create-user', { body: { action: 'update_user', user_id: userId, new_password: newPassword } })
+    setResettingPw(false)
+    const errMsg = error?.message || (data as { error?: string })?.error
+    if (!errMsg) setNewPassword('')
+    setMsg(errMsg ? `⚠ ${errMsg}` : '✓ Password reset.')
+  }
+
+  async function handleSetRole(newRole: string) {
+    if (!userId) return
+    await supabase.from('user_roles').delete().eq('user_id', userId)
+    const { error } = await supabase.from('user_roles').insert({ user_id: userId, role: newRole })
+    if (error) return alert(error.message)
+    setRole(newRole)
+  }
+
+  async function handleTogglePage(page: PageKey, allowed: boolean) {
+    if (!userId) return
+    setPageAccess((cur) => ({ ...(cur ?? DEFAULT_PAGE_ACCESS), [page]: allowed }))
+    const { error } = await supabase.from('user_page_access').upsert({ user_id: userId, page, allowed }, { onConflict: 'user_id,page' })
+    if (error) alert(error.message)
+  }
+
+  const input = 'w-full rounded-lg border border-slate-300 px-3 py-2 text-sm'
+
+  if (!userId) {
+    return (
+      <form onSubmit={handleCreateLogin} className="mt-3 grid gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3 sm:grid-cols-2">
+        <p className="text-sm font-medium text-navy-800 sm:col-span-2">No login yet — create one so {personName.split(' ')[0]} can sign in.</p>
+        <input name="username" required placeholder="Username (what they'll type to sign in)" className={input} />
+        <select name="role" defaultValue={defaultRole} className={input}>
+          {TEAM_ROLES.map((r) => (
+            <option key={r.value} value={r.value}>
+              {r.label}
+            </option>
+          ))}
+        </select>
+        <input name="email" type="email" required defaultValue={personEmail ?? ''} placeholder="Email (required by the login system, not shown to them)" className={`${input} sm:col-span-2`} />
+        <input name="password" required minLength={6} placeholder="Temporary password (min 6 chars)" className={input} />
+        <button type="submit" disabled={creating} className="rounded-lg bg-navy-900 px-4 py-2 text-sm font-medium text-white hover:bg-navy-800 disabled:opacity-50 sm:col-span-2">
+          {creating ? 'Creating…' : 'Create login'}
+        </button>
+        {msg && <p className={`text-sm sm:col-span-2 ${msg.startsWith('✓') ? 'text-green-700' : 'text-red-600'}`}>{msg}</p>}
+      </form>
+    )
+  }
+
+  return (
+    <div className="mt-3 space-y-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
+      <div className="grid gap-3 sm:grid-cols-3">
+        <div>
+          <label className="mb-1 block text-xs text-slate-500">Username</label>
+          <div className="flex gap-2">
+            <input value={username} onChange={(e) => setUsername(e.target.value)} className={input} />
+            <button onClick={handleSaveUsername} disabled={savingUsername} className="shrink-0 rounded-lg border border-slate-300 px-3 py-2 text-sm text-navy-800 hover:bg-slate-50 disabled:opacity-50">
+              Save
+            </button>
+          </div>
+        </div>
+        <div>
+          <label className="mb-1 block text-xs text-slate-500">Role</label>
+          <select value={role ?? ''} onChange={(e) => handleSetRole(e.target.value)} disabled={isSelf} title={isSelf ? "You can't change your own role" : undefined} className={`${input} disabled:opacity-50`}>
+            <option value="" disabled>
+              No role
+            </option>
+            {TEAM_ROLES.map((r) => (
+              <option key={r.value} value={r.value}>
+                {r.label}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label className="mb-1 block text-xs text-slate-500">Reset password</label>
+          <div className="flex gap-2">
+            <input type="text" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} placeholder="New password" className={input} />
+            <button onClick={handleResetPassword} disabled={resettingPw} className="shrink-0 rounded-lg border border-slate-300 px-3 py-2 text-sm text-navy-800 hover:bg-slate-50 disabled:opacity-50">
+              Reset
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {role === 'dentist' ? (
+        <p className="text-xs text-slate-400">The owner role always has full access to every page — nothing to configure here.</p>
+      ) : (
+        <div>
+          <p className="mb-1 text-xs text-slate-500">Pages this person can open:</p>
+          <div className="flex flex-wrap gap-3">
+            {(Object.keys(PAGE_LABELS) as PageKey[]).map((page) => (
+              <label key={page} className="flex items-center gap-1.5 text-sm text-navy-800">
+                <input type="checkbox" checked={pageAccess?.[page] ?? DEFAULT_PAGE_ACCESS[page]} onChange={(e) => handleTogglePage(page, e.target.checked)} />
+                {PAGE_LABELS[page]}
+              </label>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {msg && <p className={`text-sm ${msg.startsWith('✓') ? 'text-green-700' : 'text-red-600'}`}>{msg}</p>}
+    </div>
+  )
+}
+
+function ProviderFields({ provider, onSave, onCancel }: { provider?: Provider; onSave: (payload: Record<string, unknown>) => void; onCancel: () => void }) {
+  function handleSubmit(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault()
+    const form = new FormData(e.currentTarget)
+    onSave({
+      first_name: form.get('first_name'),
+      last_name: form.get('last_name'),
+      email: form.get('email') || null,
+      phone: form.get('phone') || null,
+      specialty: form.get('specialty') || null,
+      license_number: form.get('license_number') || null,
+      active: form.get('active') === 'on',
+    })
+  }
+  return (
+    <form onSubmit={handleSubmit} className="grid gap-2 rounded-lg border border-slate-200 p-3 sm:grid-cols-2">
+      <input name="first_name" required defaultValue={provider?.first_name ?? ''} placeholder="First name" className="rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+      <input name="last_name" required defaultValue={provider?.last_name ?? ''} placeholder="Last name" className="rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+      <select name="specialty" defaultValue={provider?.specialty ?? ''} className="rounded-lg border border-slate-300 px-3 py-2 text-sm">
+        <option value="">Specialty…</option>
+        {DENTAL_SPECIALTIES.map((s) => (
+          <option key={s} value={s}>
+            {s}
+          </option>
+        ))}
+      </select>
+      <input name="license_number" defaultValue={provider?.license_number ?? ''} placeholder="License / syndicate number" className="rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+      <input name="email" type="email" defaultValue={provider?.email ?? ''} placeholder="Email" className="rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+      <input name="phone" defaultValue={provider?.phone ?? ''} placeholder="Phone" className="rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+      <label className="flex items-center gap-2 text-sm text-navy-800 sm:col-span-2">
+        <input type="checkbox" name="active" defaultChecked={provider?.active ?? true} />
+        Active
+      </label>
+      <div className="flex gap-2 sm:col-span-2">
+        <button type="submit" className="rounded-lg bg-navy-900 px-4 py-2 text-sm font-medium text-white hover:bg-navy-800">
+          Save
+        </button>
+        <button type="button" onClick={onCancel} className="rounded-lg border border-slate-300 px-4 py-2 text-sm text-navy-800 hover:bg-slate-50">
+          Cancel
+        </button>
+      </div>
+    </form>
   )
 }
 
@@ -281,12 +632,11 @@ function EmployeeForm({
 }: {
   employee?: Employee
   settings: AppSettings
-  onSave: (payload: Record<string, unknown>, file: File | null, login?: { email: string; password: string; role: string } | null) => void
+  onSave: (payload: Record<string, unknown>, file: File | null) => void
   onCancel: () => void
 }) {
   const [file, setFile] = useState<File | null>(null)
   const [hoursMode, setHoursMode] = useState<'shift' | 'flexible'>(employee && !employee.shift_start ? 'flexible' : 'shift')
-  const [makeLogin, setMakeLogin] = useState(false)
   const input = 'w-full rounded-lg border border-slate-300 px-3 py-2 text-sm'
 
   function handleSubmit(e: FormEvent<HTMLFormElement>) {
@@ -323,9 +673,6 @@ function EmployeeForm({
         active: f.get('active') === 'on',
       },
       file,
-      (!employee || !employee.user_id) && makeLogin
-        ? { email: String(f.get('login_email') || f.get('email') || '').trim(), password: String(f.get('login_password') || ''), role: String(f.get('login_role') || 'assistant') }
-        : null,
     )
   }
 
@@ -445,26 +792,6 @@ function EmployeeForm({
         <input type="checkbox" name="active" defaultChecked={employee?.active ?? true} />
         Active
       </label>
-
-      {(!employee || !employee.user_id) && (
-        <div className="rounded-lg border border-slate-200 bg-white p-3 sm:col-span-2">
-          <label className="flex items-center gap-2 text-sm font-medium text-navy-800">
-            <input type="checkbox" checked={makeLogin} onChange={(e) => setMakeLogin(e.target.checked)} />
-            Create a login for this employee
-          </label>
-          {makeLogin && (
-            <div className="mt-3 grid gap-3 sm:grid-cols-3">
-              <input name="login_email" type="email" placeholder="Login email (defaults to the email above)" className={`${input} sm:col-span-3`} />
-              <input name="login_password" type="text" placeholder="Temporary password (min 6)" className={input} />
-              <select name="login_role" defaultValue="assistant" className={input}>
-                <option value="assistant">Assistant</option>
-                <option value="receptionist">Receptionist</option>
-              </select>
-              <p className="text-[11px] text-slate-400 sm:col-span-3">They sign in with this email + temporary password and can change it afterward. Access is set by their role.</p>
-            </div>
-          )}
-        </div>
-      )}
 
       <div className="flex gap-2 sm:col-span-2">
         <button type="submit" className="rounded-lg bg-navy-900 px-4 py-2 text-sm font-medium text-white hover:bg-navy-800">

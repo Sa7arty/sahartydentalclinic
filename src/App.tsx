@@ -1,5 +1,6 @@
 import { Routes, Route, Navigate } from 'react-router-dom'
 import ProtectedRoute from './components/ProtectedRoute'
+import PageGuard from './components/PageGuard'
 import Layout from './components/Layout'
 import Login from './pages/Login'
 import Dashboard from './pages/Dashboard'
@@ -25,17 +26,87 @@ export default function App() {
           </ProtectedRoute>
         }
       >
-        <Route index element={<Dashboard />} />
-        <Route path="patients" element={<PatientsList />} />
-        <Route path="patients/:id" element={<PatientDetail />} />
-        <Route path="schedule" element={<Schedule />} />
-        <Route path="schedule/new-visit" element={<NewVisit />} />
-        <Route path="finances" element={<Balance />} />
+        <Route
+          index
+          element={
+            <PageGuard page="dashboard">
+              <Dashboard />
+            </PageGuard>
+          }
+        />
+        <Route
+          path="patients"
+          element={
+            <PageGuard page="patients">
+              <PatientsList />
+            </PageGuard>
+          }
+        />
+        <Route
+          path="patients/:id"
+          element={
+            <PageGuard page="patients">
+              <PatientDetail />
+            </PageGuard>
+          }
+        />
+        <Route
+          path="schedule"
+          element={
+            <PageGuard page="schedule">
+              <Schedule />
+            </PageGuard>
+          }
+        />
+        <Route
+          path="schedule/new-visit"
+          element={
+            <PageGuard page="schedule">
+              <NewVisit />
+            </PageGuard>
+          }
+        />
+        <Route
+          path="finances"
+          element={
+            <PageGuard page="finances">
+              <Balance />
+            </PageGuard>
+          }
+        />
         <Route path="balance" element={<Navigate to="/finances" replace />} />
-        <Route path="hr" element={<HR />} />
-        <Route path="analytics" element={<Analytics />} />
-        <Route path="inventory" element={<Inventory />} />
-        <Route path="settings" element={<Settings />} />
+        <Route
+          path="hr"
+          element={
+            <PageGuard page="hr">
+              <HR />
+            </PageGuard>
+          }
+        />
+        <Route
+          path="analytics"
+          element={
+            <PageGuard page="analytics">
+              <Analytics />
+            </PageGuard>
+          }
+        />
+        <Route
+          path="inventory"
+          element={
+            <PageGuard page="inventory">
+              <Inventory />
+            </PageGuard>
+          }
+        />
+        <Route
+          path="settings"
+          element={
+            <PageGuard page="settings">
+              <Settings />
+            </PageGuard>
+          }
+        />
       </Route>
     </Routes>
   )
