@@ -112,12 +112,12 @@ async function drawLetterheadHeader(doc: jsPDF, subtitle: string, lh: Letterhead
 }
 
 /**
- * The footer is a fixed 5-row layout: Tel/Email, a blank row, Address, a
- * blank row, Website — each row lh.footer_line_gap_mm tall. The Tel/Email
- * row auto-wraps if it's too wide for the page (a large footer_text_size_pt
- * with long numbers can otherwise run off both edges); Address and Website
- * each already have a row to themselves so they don't need that fallback.
- * Recomputed per page since paper size affects the available width.
+ * The footer is a fixed 3-row layout: Tel/Email, Address, Website — each row
+ * lh.footer_line_gap_mm tall. The Tel/Email row auto-wraps if it's too wide
+ * for the page (a large footer_text_size_pt with long numbers can otherwise
+ * run off both edges); Address and Website each already have a row to
+ * themselves so they don't need that fallback. Recomputed per page since
+ * paper size affects the available width.
  */
 function computeFooterLines(doc: jsPDF, lh: LetterheadSettings): string[] {
   const maxWidth = doc.internal.pageSize.getWidth() - 28
@@ -126,7 +126,7 @@ function computeFooterLines(doc: jsPDF, lh: LetterheadSettings): string[] {
   const contactLine = `Tel: ${lh.clinic_phone}    Email: ${lh.clinic_email}`
   const contactRows =
     doc.getTextWidth(contactLine) > maxWidth ? [`Tel: ${lh.clinic_phone}`, `Email: ${lh.clinic_email}`] : [contactLine]
-  return [...contactRows, '', `Address: ${lh.clinic_address}`, '', `Website: ${lh.clinic_website}`]
+  return [...contactRows, `Address: ${lh.clinic_address}`, `Website: ${lh.clinic_website}`]
 }
 
 /** mm reserved at the bottom of the page for the footer (divider + rows + safety margin). */

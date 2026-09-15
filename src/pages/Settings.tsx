@@ -1245,17 +1245,15 @@ export default function Settings() {
                   onChange={(e) => setLetterhead((l) => ({ ...l, footer_line_gap_mm: Number(e.target.value) }))}
                   className="w-full rounded-lg border border-slate-300 px-3 py-2"
                 />
-                <p className="mt-0.5 text-[11px] text-slate-400">Height of each footer row — including the blank rows between Tel/Email, Address, and Website.</p>
+                <p className="mt-0.5 text-[11px] text-slate-400">Height of each footer row — Tel/Email, Address, and Website.</p>
               </div>
             </div>
             <div className="rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-500">
-              <p>Preview (5 rows: Tel/Email, blank, Address, blank, Website):</p>
+              <p>Preview (3 rows: Tel/Email, Address, Website):</p>
               <p>
                 Tel: {letterhead.clinic_phone}&nbsp;&nbsp;&nbsp;Email: {letterhead.clinic_email}
               </p>
-              <div style={{ height: `${letterhead.footer_line_gap_mm * 2}px` }} />
               <p>Address: {letterhead.clinic_address}</p>
-              <div style={{ height: `${letterhead.footer_line_gap_mm * 2}px` }} />
               <p>Website: {letterhead.clinic_website}</p>
             </div>
           </div>
