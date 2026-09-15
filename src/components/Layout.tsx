@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { NavLink, Outlet } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
+import UpdateBanner from './UpdateBanner'
 
 const navItem = 'block rounded-lg px-4 py-2 text-sm font-medium transition-colors hover:bg-navy-800'
 const navItemActive = 'bg-navy-800 text-gold-400'
@@ -101,6 +102,7 @@ export default function Layout() {
         )}
         <Outlet />
       </main>
+      <UpdateBanner />
     </div>
   )
 }
