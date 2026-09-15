@@ -1226,3 +1226,13 @@ alter table public.providers add column if not exists user_id uuid references au
 -- migration: it now accepts an `action` of 'create_user' (as before, plus a
 -- required `username`) or 'update_user' (set a new username and/or reset an
 -- existing user's password) — both still owner-gated the same way.
+
+-- One-way (app -> Google) appointment sync, per provider. A provider's
+-- calendar is owned by a Google service account and shared (read-only) with
+-- the provider's own `email`, so no per-provider Google login is needed —
+-- see the sync-google-calendar edge function (source kept in the Supabase
+-- dashboard). Inert until the GOOGLE_SERVICE_ACCOUNT_KEY edge function secret
+-- is configured; until then the function no-ops and these columns stay null.
+alter table public.providers add column if not exists google_calendar_sync_enabled boolean not null default false;
+alter table public.providers add column if not exists google_calendar_id text;
+alter table public.visits add column if not exists google_event_id text;

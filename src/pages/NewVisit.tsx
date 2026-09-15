@@ -5,6 +5,7 @@ import { useAuth } from '../context/AuthContext'
 import { useSettings } from '../context/SettingsContext'
 import PatientForm from '../components/PatientForm'
 import { Patient, Location, Provider, PatientGroup, providerFullName, patientFullName, formatDobAge } from '../types'
+import { syncVisitToGoogle } from '../lib/googleCalendarSync'
 
 // Supabase caps a single request at 1000 rows. The clinic has more patients than
 // that, so we page through them in 1000-row batches — otherwise patients past the
@@ -93,22 +94,27 @@ export default function NewVisit() {
     }
     setScheduling(true)
     const clinicLocation = selectedPatient.primary_location_id ?? locationIds[0] ?? locations[0]?.id
-    const { error } = await supabase.from('visits').insert({
-      patient_id: selectedPatient.id,
-      location_id: clinicLocation,
-      provider_id: providerId,
-      // datetime-local has no timezone; interpret it as local time and store as
-      // a proper ISO instant so the Schedule shows the exact time that was picked.
-      scheduled_at: new Date(form.get('scheduled_at') as string).toISOString(),
-      duration_minutes: Number(form.get('duration_minutes')),
-      notes: form.get('notes') || null,
-      status: (form.get('status') as string) || 'unconfirmed',
-    })
+    const { data, error } = await supabase
+      .from('visits')
+      .insert({
+        patient_id: selectedPatient.id,
+        location_id: clinicLocation,
+        provider_id: providerId,
+        // datetime-local has no timezone; interpret it as local time and store as
+        // a proper ISO instant so the Schedule shows the exact time that was picked.
+        scheduled_at: new Date(form.get('scheduled_at') as string).toISOString(),
+        duration_minutes: Number(form.get('duration_minutes')),
+        notes: form.get('notes') || null,
+        status: (form.get('status') as string) || 'unconfirmed',
+      })
+      .select()
+      .single()
     setScheduling(false)
     if (error) {
       alert(error.message)
       return
     }
+    if (data) syncVisitToGoogle(data.id)
     navigate('/schedule')
   }
 

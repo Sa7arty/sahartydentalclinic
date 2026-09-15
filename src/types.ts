@@ -20,6 +20,8 @@ export interface Provider {
   license_number: string | null
   active: boolean
   user_id: string | null
+  google_calendar_sync_enabled: boolean
+  google_calendar_id: string | null
 }
 
 /** The app's distinct sections, for per-person page-level access control. */
@@ -524,6 +526,7 @@ export interface Visit {
   duration_minutes: number
   status: VisitStatus
   notes: string | null
+  google_event_id: string | null
 }
 
 export type ExpenseType = 'general' | 'provider_fee' | 'lab_fee'

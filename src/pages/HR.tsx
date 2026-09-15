@@ -563,6 +563,7 @@ function ProviderFields({ provider, onSave, onCancel }: { provider?: Provider; o
       specialty: form.get('specialty') || null,
       license_number: form.get('license_number') || null,
       active: form.get('active') === 'on',
+      google_calendar_sync_enabled: form.get('google_calendar_sync_enabled') === 'on',
     })
   }
   return (
@@ -583,6 +584,10 @@ function ProviderFields({ provider, onSave, onCancel }: { provider?: Provider; o
       <label className="flex items-center gap-2 text-sm text-navy-800 sm:col-span-2">
         <input type="checkbox" name="active" defaultChecked={provider?.active ?? true} />
         Active
+      </label>
+      <label className="flex items-center gap-2 text-sm text-navy-800 sm:col-span-2">
+        <input type="checkbox" name="google_calendar_sync_enabled" defaultChecked={provider?.google_calendar_sync_enabled ?? false} />
+        Sync this provider's appointments to their Google Calendar (requires an email above)
       </label>
       <div className="flex gap-2 sm:col-span-2">
         <button type="submit" className="rounded-lg bg-navy-900 px-4 py-2 text-sm font-medium text-white hover:bg-navy-800">

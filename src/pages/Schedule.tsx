@@ -7,6 +7,7 @@ import { useSettings } from '../context/SettingsContext'
 import { toYmd, fromYmd, addDays, addMonths, startOfWeek, startOfMonth, endOfMonth, dayStart, dayEnd, toDatetimeLocal, WEEKDAY_NAMES_FROM } from '../lib/dates'
 import { exportDaySchedulePdf } from '../lib/pdf'
 import PatientBadges from '../components/PatientBadges'
+import { syncVisitToGoogle, deleteVisitFromGoogle } from '../lib/googleCalendarSync'
 
 type SchedulePatient = Pick<Patient, 'id' | 'first_name' | 'middle_name' | 'last_name' | 'phone' | 'date_of_birth' | 'is_smoker'> & {
   medical_history: string | null
@@ -74,32 +75,42 @@ export default function Schedule() {
     setVisits((cur) => cur.map((v) => (v.id === visitId ? { ...v, duration_minutes: minutes } : v)))
     const { error } = await supabase.from('visits').update({ duration_minutes: minutes }).eq('id', visitId)
     if (error) alert(error.message)
+    else syncVisitToGoogle(visitId)
   }
 
   async function handleChangeStatus(visitId: string, status: VisitStatus) {
     setVisits((cur) => cur.map((v) => (v.id === visitId ? { ...v, status } : v)))
     const { error } = await supabase.from('visits').update({ status }).eq('id', visitId)
     if (error) alert(error.message)
+    else syncVisitToGoogle(visitId)
   }
 
   async function handleChangeProvider(visitId: string, providerId: string) {
     setVisits((cur) => cur.map((v) => (v.id === visitId ? { ...v, provider_id: providerId || null } : v)))
-    const { error } = await supabase.from('visits').update({ provider_id: providerId || null }).eq('id', visitId)
+    // Clear the synced event id when the provider changes — a synced event lives
+    // on the OLD provider's Google Calendar, so it can't just be patched onto the
+    // new provider; clearing it makes the next sync create a fresh event there.
+    const { error } = await supabase.from('visits').update({ provider_id: providerId || null, google_event_id: null }).eq('id', visitId)
     if (error) alert(error.message)
+    else syncVisitToGoogle(visitId)
   }
 
   async function handleSaveVisitEdit(patch: Record<string, unknown>) {
     if (!editingVisit) return
+    if ('provider_id' in patch && patch.provider_id !== editingVisit.provider_id) patch.google_event_id = null
     const { error } = await supabase.from('visits').update(patch).eq('id', editingVisit.id)
     if (error) alert(error.message)
     else {
+      const visitId = editingVisit.id
       setEditingVisit(null)
       load()
+      syncVisitToGoogle(visitId)
     }
   }
 
   async function handleDeleteVisit(visitId: string) {
     if (!confirm('Delete this appointment? This cannot be undone.')) return
+    deleteVisitFromGoogle(visitId)
     const { error } = await supabase.from('visits').delete().eq('id', visitId)
     if (error) alert(error.message)
     else {

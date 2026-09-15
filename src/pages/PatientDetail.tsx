@@ -1,6 +1,7 @@
 import { FormEvent, useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
+import { syncVisitToGoogle, deleteVisitFromGoogle } from '../lib/googleCalendarSync'
 import { useAuth } from '../context/AuthContext'
 import { useSettings } from '../context/SettingsContext'
 import RoleGate from '../components/RoleGate'
@@ -231,31 +232,43 @@ export default function PatientDetail() {
       alert('Please choose a provider for this visit.')
       return
     }
-    const { error } = await supabase.from('visits').insert({
-      patient_id: id,
-      location_id: patient.primary_location_id,
-      provider_id: providerId,
-      // Interpret the local datetime-local value and store as an ISO instant so
-      // the visit shows at the exact time that was picked (no timezone shift).
-      scheduled_at: new Date(form.get('scheduled_at') as string).toISOString(),
-      status: (form.get('status') as string) || 'unconfirmed',
-    })
-    if (!error) load(id)
-    else alert(error.message)
+    const { data, error } = await supabase
+      .from('visits')
+      .insert({
+        patient_id: id,
+        location_id: patient.primary_location_id,
+        provider_id: providerId,
+        // Interpret the local datetime-local value and store as an ISO instant so
+        // the visit shows at the exact time that was picked (no timezone shift).
+        scheduled_at: new Date(form.get('scheduled_at') as string).toISOString(),
+        status: (form.get('status') as string) || 'unconfirmed',
+      })
+      .select()
+      .single()
+    if (!error) {
+      load(id)
+      if (data) syncVisitToGoogle(data.id)
+    } else alert(error.message)
   }
 
   async function handleChangeVisitStatus(visitId: string, status: VisitStatus) {
     if (!id) return
     const { error } = await supabase.from('visits').update({ status }).eq('id', visitId)
-    if (!error) load(id)
-    else alert(error.message)
+    if (!error) {
+      load(id)
+      syncVisitToGoogle(visitId)
+    } else alert(error.message)
   }
 
   async function handleChangeVisitProvider(visitId: string, providerId: string) {
     if (!id) return
-    const { error } = await supabase.from('visits').update({ provider_id: providerId || null }).eq('id', visitId)
-    if (!error) load(id)
-    else alert(error.message)
+    // A synced event lives on the OLD provider's Google Calendar, so clear the
+    // event id — the next sync creates a fresh event on the new provider's calendar.
+    const { error } = await supabase.from('visits').update({ provider_id: providerId || null, google_event_id: null }).eq('id', visitId)
+    if (!error) {
+      load(id)
+      syncVisitToGoogle(visitId)
+    } else alert(error.message)
   }
 
   async function handleSaveVisit(visitId: string) {
@@ -269,12 +282,14 @@ export default function PatientDetail() {
     if (!error) {
       setExpandedVisitId(null)
       load(id)
+      syncVisitToGoogle(visitId)
     } else alert(error.message)
   }
 
   async function handleDeleteVisit(visitId: string) {
     if (!id) return
     if (!confirm('Delete this appointment? This cannot be undone.')) return
+    deleteVisitFromGoogle(visitId)
     const { error } = await supabase.from('visits').delete().eq('id', visitId)
     if (!error) {
       setExpandedVisitId(null)
