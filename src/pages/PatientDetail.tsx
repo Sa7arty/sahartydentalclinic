@@ -983,7 +983,7 @@ export default function PatientDetail() {
                         <div>
                           <label className="mb-1 block text-xs text-slate-500">Duration</label>
                           <select value={visitDurationDraft} onChange={(e) => setVisitDurationDraft(Number(e.target.value))} className="rounded-lg border border-slate-300 px-3 py-2 text-sm">
-                            {[15, 20, 30, 45, 60, 75, 90, 120].map((n) => (
+                            {[15, 20, 30, 45, 60, 75, 90, 120, 180, 240, 300].map((n) => (
                               <option key={n} value={n}>
                                 {n} min
                               </option>

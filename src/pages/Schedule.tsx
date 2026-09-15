@@ -47,7 +47,7 @@ type VisitRow = Visit & { patient: SchedulePatient | null }
 const NO_PROVIDER = ''
 type View = 'day' | 'week' | 'month'
 
-const DURATION_OPTIONS = [15, 20, 30, 45, 60, 75, 90, 120]
+const DURATION_OPTIONS = [15, 20, 30, 45, 60, 75, 90, 120, 180, 240, 300]
 
 function addMinutes(iso: string, minutes: number) {
   return new Date(new Date(iso).getTime() + minutes * 60000)
@@ -135,6 +135,96 @@ function layoutDayOverlaps(visits: VisitRow[]): Map<string, { col: number; cols:
   }
   flushCluster()
   return result
+}
+
+interface DragGhost {
+  visitId: string
+  patientName: string
+  status: VisitStatus
+  durationMinutes: number
+  targetYmd: string
+  targetMinutes: number
+}
+
+/**
+ * Custom pointer-based drag-and-drop for the Schedule grid, replacing native HTML5
+ * drag (which gave no live preview and felt unreliable). Tracks the pointer on the
+ * whole window from pointerdown to pointerup so it keeps working even while the
+ * cursor passes over other appointment blocks or day columns; finds the day column
+ * under the cursor via `document.elementFromPoint` + a `data-daycol` marker, so it
+ * works the same for a single day column (Day view) or several side-by-side (Week).
+ */
+function useScheduleDrag(onReschedule: (visitId: string, targetYmd: string, minutesFromMidnight: number) => void) {
+  const [dragGhost, setDragGhost] = useState<DragGhost | null>(null)
+  const dragRef = useRef<(DragGhost & { startX: number; startY: number; dragging: boolean }) | null>(null)
+  const justDraggedRef = useRef(false)
+
+  useEffect(() => {
+    function handleMove(e: PointerEvent) {
+      const drag = dragRef.current
+      if (!drag) return
+      if (!drag.dragging && Math.hypot(e.clientX - drag.startX, e.clientY - drag.startY) < 6) return
+      drag.dragging = true
+
+      const col = (document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null)?.closest('[data-daycol]') as HTMLElement | null
+      if (!col) return
+      const rect = col.getBoundingClientRect()
+      drag.targetYmd = col.dataset.daycol!
+      drag.targetMinutes = pxToSnappedMinutes(e.clientY - rect.top)
+      setDragGhost({
+        visitId: drag.visitId,
+        patientName: drag.patientName,
+        status: drag.status,
+        durationMinutes: drag.durationMinutes,
+        targetYmd: drag.targetYmd,
+        targetMinutes: drag.targetMinutes,
+      })
+    }
+    function handleUp() {
+      const drag = dragRef.current
+      if (drag?.dragging) {
+        justDraggedRef.current = true
+        onReschedule(drag.visitId, drag.targetYmd, drag.targetMinutes)
+        setTimeout(() => {
+          justDraggedRef.current = false
+        }, 0)
+      }
+      dragRef.current = null
+      setDragGhost(null)
+    }
+    window.addEventListener('pointermove', handleMove)
+    window.addEventListener('pointerup', handleUp)
+    return () => {
+      window.removeEventListener('pointermove', handleMove)
+      window.removeEventListener('pointerup', handleUp)
+    }
+  }, [onReschedule])
+
+  function startDrag(e: React.PointerEvent, v: VisitRow, originYmd: string) {
+    if (e.button !== 0) return
+    dragRef.current = {
+      visitId: v.id,
+      patientName: v.patient ? patientFullName(v.patient) : 'Unknown',
+      status: v.status,
+      durationMinutes: v.duration_minutes,
+      targetYmd: originYmd,
+      targetMinutes: minutesFromMidnight(v.scheduled_at),
+      startX: e.clientX,
+      startY: e.clientY,
+      dragging: false,
+    }
+  }
+
+  /** Wrap a block's onEdit click so a drag that just ended doesn't also open the editor. */
+  function guardClick(e: React.MouseEvent, onEdit: () => void) {
+    if (justDraggedRef.current) {
+      e.preventDefault()
+      return
+    }
+    onEdit()
+  }
+
+  return { dragGhost, draggingVisitId: dragGhost?.visitId ?? null, startDrag, guardClick }
 }
 
 export default function Schedule() {
@@ -519,7 +609,10 @@ function DayGridColumn({
   onEdit,
   onChangeStatus,
   onCreateVisit,
-  onReschedule,
+  dragGhost,
+  draggingVisitId,
+  onStartDrag,
+  guardClick,
   conditionIds,
   elderlyThreshold,
   dayHours,
@@ -531,7 +624,10 @@ function DayGridColumn({
   onEdit: (v: VisitRow) => void
   onChangeStatus?: (id: string, status: VisitStatus) => void
   onCreateVisit: (ymd: string, minutesFromMidnight: number) => void
-  onReschedule: (visitId: string, targetYmd: string, minutesFromMidnight: number) => void
+  dragGhost: DragGhost | null
+  draggingVisitId: string | null
+  onStartDrag: (e: React.PointerEvent, v: VisitRow, originYmd: string) => void
+  guardClick: (e: React.MouseEvent, onEdit: () => void) => void
   conditionIds: Set<string>
   elderlyThreshold: number
   dayHours: DayHours
@@ -547,25 +643,12 @@ function DayGridColumn({
     onCreateVisit(ymd, pxToSnappedMinutes(e.clientY - rect.top))
   }
 
-  function handleDragOver(e: React.DragEvent<HTMLDivElement>) {
-    e.preventDefault()
-  }
-
-  function handleDrop(e: React.DragEvent<HTMLDivElement>) {
-    e.preventDefault()
-    const visitId = e.dataTransfer.getData('text/plain')
-    if (!visitId) return
-    const rect = e.currentTarget.getBoundingClientRect()
-    onReschedule(visitId, ymd, pxToSnappedMinutes(e.clientY - rect.top))
-  }
-
   return (
     <div
+      data-daycol={ymd}
       className="relative border-l border-slate-100"
       style={{ height: HOUR_HEIGHT * 24 }}
       onDoubleClick={handleBackgroundDoubleClick}
-      onDragOver={handleDragOver}
-      onDrop={handleDrop}
     >
       {openMin > 0 && <div className="absolute inset-x-0 top-0 bg-slate-100" style={{ height: (openMin / 60) * HOUR_HEIGHT }} />}
       {closeMin < 24 * 60 && (
@@ -592,19 +675,18 @@ function DayGridColumn({
         const tel = !compact ? telHref(v.patient?.phone ?? null) : null
         const wa = !compact ? whatsappHref(v.patient?.phone ?? null) : null
         const showActions = !compact && (tel || wa)
+        const isBeingDragged = draggingVisitId === v.id
         return (
           <div
             key={v.id}
-            draggable
-            onDragStart={(e) => {
-              e.dataTransfer.setData('text/plain', v.id)
-              e.dataTransfer.effectAllowed = 'move'
-            }}
-            onDoubleClick={(e) => e.stopPropagation()}
-            className={`absolute cursor-grab overflow-hidden rounded-md border text-white active:cursor-grabbing ${visitBlockClass(v.status)}`}
-            style={{ top, height, left: `calc(${col * widthPct}% + 1px)`, width: `calc(${widthPct}% - 2px)` }}
+            onPointerDown={(e) => onStartDrag(e, v, ymd)}
+            className={`absolute cursor-grab select-none overflow-hidden rounded-md border text-white active:cursor-grabbing ${visitBlockClass(v.status)} ${isBeingDragged ? 'opacity-30' : ''}`}
+            style={{ top, height, left: `calc(${col * widthPct}% + 1px)`, width: `calc(${widthPct}% - 2px)`, touchAction: 'none' }}
           >
-            <button onClick={() => onEdit(v)} className={`block w-full px-1.5 py-0.5 text-left text-[10px] leading-tight ${showActions ? 'pr-14' : ''}`}>
+            <button
+              onClick={(e) => guardClick(e, () => onEdit(v))}
+              className={`block w-full px-1.5 py-0.5 text-left text-[10px] leading-tight ${showActions ? 'pr-14' : ''}`}
+            >
               <p className="flex items-center gap-0.5 truncate font-semibold">
                 {v.patient ? patientFullName(v.patient) : 'Unknown'}
                 {height >= 56 && v.patient && (
@@ -626,6 +708,7 @@ function DayGridColumn({
                   <a
                     href={tel}
                     title="Call"
+                    onPointerDown={(e) => e.stopPropagation()}
                     onClick={(e) => e.stopPropagation()}
                     className="rounded bg-white/25 px-1 text-[11px] leading-4 hover:bg-white/40"
                   >
@@ -638,6 +721,7 @@ function DayGridColumn({
                     target="_blank"
                     rel="noreferrer"
                     title="WhatsApp"
+                    onPointerDown={(e) => e.stopPropagation()}
                     onClick={(e) => e.stopPropagation()}
                     className="rounded bg-white/25 px-1 text-[11px] leading-4 hover:bg-white/40"
                   >
@@ -650,6 +734,7 @@ function DayGridColumn({
               <select
                 value={v.status}
                 onChange={(e) => onChangeStatus(v.id, e.target.value as VisitStatus)}
+                onPointerDown={(e) => e.stopPropagation()}
                 onClick={(e) => e.stopPropagation()}
                 className="absolute bottom-0.5 left-1.5 right-1.5 rounded border-0 bg-white/20 px-1 py-0 text-[10px] text-white hover:bg-white/30"
               >
@@ -663,6 +748,21 @@ function DayGridColumn({
           </div>
         )
       })}
+      {dragGhost && dragGhost.targetYmd === ymd && (
+        <div
+          className={`pointer-events-none absolute z-30 overflow-hidden rounded-md border-2 border-dashed border-white text-white shadow-lg ${visitBlockClass(dragGhost.status)}`}
+          style={{
+            top: (dragGhost.targetMinutes / 60) * HOUR_HEIGHT,
+            height: Math.max((dragGhost.durationMinutes / 60) * HOUR_HEIGHT, 18),
+            left: 1,
+            right: 1,
+          }}
+        >
+          <p className="truncate px-1.5 py-0.5 text-[10px] font-semibold">
+            {dragGhost.patientName} · {quarterLabel(dragGhost.targetMinutes / 15)}
+          </p>
+        </div>
+      )}
     </div>
   )
 }
@@ -709,6 +809,7 @@ function DayGridView({
 }) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const dayHours = dayHoursFor(businessHours, ymd)
+  const { dragGhost, draggingVisitId, startDrag, guardClick } = useScheduleDrag(onReschedule)
 
   useEffect(() => {
     const scrollToMin = dayHours.closed ? 8 * 60 : Math.max(0, parseHHMM(dayHours.open) - 60)
@@ -729,7 +830,10 @@ function DayGridView({
             onEdit={onEdit}
             onChangeStatus={onChangeStatus}
             onCreateVisit={onCreateVisit}
-            onReschedule={onReschedule}
+            dragGhost={dragGhost}
+            draggingVisitId={draggingVisitId}
+            onStartDrag={startDrag}
+            guardClick={guardClick}
             conditionIds={conditionIds}
             elderlyThreshold={elderlyThreshold}
             dayHours={dayHours}
@@ -768,6 +872,7 @@ function WeekView({
 }) {
   const days = Array.from({ length: 7 }, (_, i) => addDays(rangeStart, i))
   const scrollRef = useRef<HTMLDivElement>(null)
+  const { dragGhost, draggingVisitId, startDrag, guardClick } = useScheduleDrag(onReschedule)
 
   useEffect(() => {
     const scrollToMin = earliestOpenMinutes(days, businessHours)
@@ -806,7 +911,10 @@ function WeekView({
               isToday={ymd === today}
               onEdit={onEdit}
               onCreateVisit={onCreateVisit}
-              onReschedule={onReschedule}
+              dragGhost={dragGhost}
+              draggingVisitId={draggingVisitId}
+              onStartDrag={startDrag}
+              guardClick={guardClick}
               conditionIds={conditionIds}
               elderlyThreshold={elderlyThreshold}
               dayHours={dayHoursFor(businessHours, ymd)}

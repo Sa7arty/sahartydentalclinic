@@ -24,7 +24,7 @@ import { WEEKDAY_NAMES_FROM } from '../lib/dates'
 import { exportPatientsCsv, downloadPatientImportTemplate, importPatientsFromCsv } from '../lib/csv'
 import { invalidateLetterheadCache } from '../lib/pdf'
 
-const DURATION_OPTIONS = [15, 20, 30, 45, 60, 75, 90, 120]
+const DURATION_OPTIONS = [15, 20, 30, 45, 60, 75, 90, 120, 180, 240, 300]
 const WEEKDAY_FULL_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
 
 type Category = 'patients' | 'calendar' | 'procedures' | 'price-list' | 'financial' | 'attendance' | 'templates' | 'backup' | 'errors'
