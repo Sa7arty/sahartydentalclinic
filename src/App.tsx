@@ -7,7 +7,6 @@ import Dashboard from './pages/Dashboard'
 import PatientsList from './pages/PatientsList'
 import PatientDetail from './pages/PatientDetail'
 import Schedule from './pages/Schedule'
-import NewVisit from './pages/NewVisit'
 import Balance from './pages/Balance'
 import HR from './pages/HR'
 import Analytics from './pages/Analytics'
@@ -55,14 +54,6 @@ export default function App() {
           element={
             <PageGuard page="schedule">
               <Schedule />
-            </PageGuard>
-          }
-        />
-        <Route
-          path="schedule/new-visit"
-          element={
-            <PageGuard page="schedule">
-              <NewVisit />
             </PageGuard>
           }
         />

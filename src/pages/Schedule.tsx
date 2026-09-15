@@ -37,6 +37,7 @@ import {
 } from '../lib/dates'
 import { exportDaySchedulePdf } from '../lib/pdf'
 import PatientBadges from '../components/PatientBadges'
+import AddVisitModal from '../components/AddVisitModal'
 import { syncVisitToGoogle, deleteVisitFromGoogle } from '../lib/googleCalendarSync'
 
 type SchedulePatient = Pick<Patient, 'id' | 'first_name' | 'middle_name' | 'last_name' | 'phone' | 'date_of_birth' | 'is_smoker'> & {
@@ -79,10 +80,12 @@ function parseHHMM(hhmm: string) {
   return (h || 0) * 60 + (m || 0)
 }
 
-/** Pixel-Y within a day column -> the 15-min slot it falls in, as minutes since midnight. */
+/** Pixel-Y within a day column -> the 15-min slot it falls in, as minutes since midnight.
+ * Floors to the slot's start (e.g. anywhere in the 4:00-4:15 band maps to 4:00), not the
+ * nearest mark — clicking/dropping inside a slot means "this slot", not "whichever edge is closer". */
 function pxToSnappedMinutes(offsetY: number) {
   const rawMinutes = (offsetY / HOUR_HEIGHT) * 60
-  return Math.max(0, Math.min(23 * 60 + 45, Math.round(rawMinutes / 15) * 15))
+  return Math.max(0, Math.min(23 * 60 + 45, Math.floor(rawMinutes / 15) * 15))
 }
 
 function dayHoursFor(businessHours: BusinessHours, ymd: string): DayHours {
@@ -157,7 +160,7 @@ interface DragGhost {
  */
 function useScheduleDrag(onReschedule: (visitId: string, targetYmd: string, minutesFromMidnight: number) => void) {
   const [dragGhost, setDragGhost] = useState<DragGhost | null>(null)
-  const dragRef = useRef<(DragGhost & { startX: number; startY: number; dragging: boolean }) | null>(null)
+  const dragRef = useRef<(DragGhost & { startX: number; startY: number; grabOffsetY: number; dragging: boolean }) | null>(null)
   const justDraggedRef = useRef(false)
 
   useEffect(() => {
@@ -171,7 +174,10 @@ function useScheduleDrag(onReschedule: (visitId: string, targetYmd: string, minu
       if (!col) return
       const rect = col.getBoundingClientRect()
       drag.targetYmd = col.dataset.daycol!
-      drag.targetMinutes = pxToSnappedMinutes(e.clientY - rect.top)
+      // Subtract where within the block the user actually grabbed it, so the block's
+      // top edge tracks the cursor with a constant offset instead of snapping its top
+      // to the raw cursor position (which felt like an instant jump on grab).
+      drag.targetMinutes = pxToSnappedMinutes(e.clientY - rect.top - drag.grabOffsetY)
       setDragGhost({
         visitId: drag.visitId,
         patientName: drag.patientName,
@@ -203,6 +209,7 @@ function useScheduleDrag(onReschedule: (visitId: string, targetYmd: string, minu
 
   function startDrag(e: React.PointerEvent, v: VisitRow, originYmd: string) {
     if (e.button !== 0) return
+    const blockTop = e.currentTarget.getBoundingClientRect().top
     dragRef.current = {
       visitId: v.id,
       patientName: v.patient ? patientFullName(v.patient) : 'Unknown',
@@ -212,6 +219,7 @@ function useScheduleDrag(onReschedule: (visitId: string, targetYmd: string, minu
       targetMinutes: minutesFromMidnight(v.scheduled_at),
       startX: e.clientX,
       startY: e.clientY,
+      grabOffsetY: e.clientY - blockTop,
       dragging: false,
     }
   }
@@ -240,6 +248,8 @@ export default function Schedule() {
   const [visits, setVisits] = useState<VisitRow[]>([])
   const [loading, setLoading] = useState(true)
   const [editingVisit, setEditingVisit] = useState<VisitRow | null>(null)
+  const [addVisitOpen, setAddVisitOpen] = useState(false)
+  const [addVisitPrefill, setAddVisitPrefill] = useState<string | null>(null)
   const [conditionIds, setConditionIds] = useState<Set<string>>(new Set())
 
   const weekStartDay = settings.week_start_day
@@ -282,10 +292,10 @@ export default function Schedule() {
     else syncVisitToGoogle(visitId)
   }
 
-  /** Double-clicked an empty grid slot — jump into the existing Add Visit flow with the date/time prefilled. */
+  /** Double-clicked an empty grid slot — open Add Visit with the date/time prefilled. */
   function handleCreateVisitAt(ymd: string, minutesFromMidnight: number) {
-    const scheduledAt = ymdAndMinutesToDate(ymd, minutesFromMidnight).toISOString()
-    navigate('/schedule/new-visit', { state: { prefillScheduledAt: scheduledAt } })
+    setAddVisitPrefill(ymdAndMinutesToDate(ymd, minutesFromMidnight).toISOString())
+    setAddVisitOpen(true)
   }
 
   /** Dragged an appointment block to a new slot (and possibly a new day, in Week view). */
@@ -385,7 +395,13 @@ export default function Schedule() {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-2xl font-semibold text-navy-900">Schedule</h1>
         <div className="flex items-center gap-2">
-          <button onClick={() => navigate('/schedule/new-visit')} className="rounded-lg bg-navy-900 px-4 py-2 text-sm font-medium text-white hover:bg-navy-800">
+          <button
+            onClick={() => {
+              setAddVisitPrefill(null)
+              setAddVisitOpen(true)
+            }}
+            className="rounded-lg bg-navy-900 px-4 py-2 text-sm font-medium text-white hover:bg-navy-800"
+          >
             + Add visit
           </button>
           {view === 'day' && (
@@ -426,7 +442,7 @@ export default function Schedule() {
           <button onClick={goNext} className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm text-navy-700 hover:bg-slate-50">
             ›
           </button>
-          <p className="ml-2 text-sm font-medium text-navy-900">{headerLabel}</p>
+          <p className="ml-2 min-w-[230px] text-left text-sm font-medium text-navy-900">{headerLabel}</p>
         </div>
       </div>
 
@@ -476,6 +492,17 @@ export default function Schedule() {
             const pid = editingVisit.patient?.id
             setEditingVisit(null)
             if (pid) navigate(`/patients/${pid}`)
+          }}
+        />
+      )}
+
+      {addVisitOpen && (
+        <AddVisitModal
+          prefillScheduledAt={addVisitPrefill}
+          onClose={() => setAddVisitOpen(false)}
+          onCreated={() => {
+            setAddVisitOpen(false)
+            load()
           }}
         />
       )}

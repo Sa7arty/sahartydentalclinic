@@ -5,3 +5,12 @@
 body {
   @apply bg-slate-50 text-navy-900;
 }
+
+/* Always reserve the scrollbar's width, whether or not the current page is tall
+   enough to need it — otherwise switching between pages/tabs whose content height
+   differs (e.g. Schedule's Day/Week vs Month view) shifts everything horizontally
+   by the scrollbar's width as it appears and disappears. */
+html {
+  overflow-y: scroll;
+  scrollbar-gutter: stable;
+}
