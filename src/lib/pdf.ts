@@ -1,4 +1,5 @@
 import jsPDF from 'jspdf'
+import { autoTable } from 'jspdf-autotable'
 import { supabase } from './supabase'
 import {
   LedgerEntry,
@@ -460,41 +461,26 @@ export async function exportPayslipPdf(d: PayslipPdfData) {
 export async function exportOrderSummaryPdf(title: string, monthLabel: string, lines: { name: string; brand: string; qty: number }[]) {
   const lh = await getLetterheadSettings()
   const doc = newLetterheadDoc(lh)
-  const right = doc.internal.pageSize.getWidth() - 14
-  let y = await drawLetterheadHeader(doc, `Order Summary — ${title} — ${monthLabel}`, lh)
-  y += 8
+  const y = await drawLetterheadHeader(doc, `Order Summary — ${title} — ${monthLabel}`, lh)
 
-  const header = () => {
-    doc.setFontSize(lh.body_text_size_pt)
-    doc.setFont('helvetica', 'bold')
-    doc.text('Item', 14, y)
-    doc.text('Brand', 120, y)
-    doc.text('Qty', right, y, { align: 'right' })
-    doc.setFont('helvetica', 'normal')
-    y += 4
-    doc.line(14, y, right, y)
-    y += 6
-  }
-  header()
+  // A real bordered grid — much easier for a vendor to scan for "item → qty
+  // needed" than plain columns of text. jspdf-autotable also repeats the
+  // header row on every page on its own.
+  autoTable(doc, {
+    startY: y + 4,
+    margin: { top: CONTINUATION_Y, left: 14, right: 14, bottom: footerReserveMm(doc, lh) + 6 },
+    head: [['Item', 'Brand', 'Qty needed']],
+    body:
+      lines.length > 0
+        ? lines.map((l) => [l.name, l.brand || '—', String(l.qty)])
+        : [[{ content: 'Nothing to order — everything is stocked.', colSpan: 3 }]],
+    theme: 'grid',
+    styles: { fontSize: lh.body_text_size_pt, cellPadding: 2.5, lineColor: [210, 210, 210], lineWidth: 0.2, valign: 'middle' },
+    headStyles: { fillColor: NAVY, textColor: [255, 255, 255], fontStyle: 'bold' },
+    columnStyles: { 2: { halign: 'right', cellWidth: 28, fontStyle: 'bold' } },
+    didDrawPage: (data) => drawLetterheadFooter(data.doc as unknown as jsPDF, lh),
+  })
 
-  if (lines.length === 0) {
-    doc.setFontSize(lh.body_text_size_pt)
-    doc.text('Nothing to order — everything is stocked.', 14, y)
-  }
-  for (const l of lines) {
-    if (y > pageBreakY(doc, lh)) {
-      doc.addPage()
-      y = CONTINUATION_Y
-      header()
-    }
-    doc.setFontSize(lh.body_text_size_pt)
-    doc.text(l.name.slice(0, 60), 14, y)
-    doc.text((l.brand || '').slice(0, 30), 120, y)
-    doc.text(String(l.qty), right, y, { align: 'right' })
-    y += 7
-  }
-
-  finalizeLetterhead(doc, lh)
   doc.save(`order-${title.replace(/\s+/g, '-')}-${monthLabel.replace(/\s+/g, '-')}.pdf`)
 }
 
