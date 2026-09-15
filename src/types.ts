@@ -279,6 +279,51 @@ export interface AppSettings {
   clinic_latitude: number | null
   clinic_longitude: number | null
   attendance_radius_meters: number
+  letterhead_settings: LetterheadSettings
+}
+
+/** Paper size every exported PDF (letters, prescriptions, receipts, payslips…) is printed on. */
+export type PaperSize = 'a4' | 'a5' | 'a6'
+
+/** Full visual customization of the clinic's shared PDF letterhead — see src/lib/pdf.ts. */
+export interface LetterheadSettings {
+  /** Public URL of a custom-uploaded logo, or null to use the clinic's bundled default. */
+  logo_url: string | null
+  logo_size_mm: number
+  clinic_name_size_pt: number
+  subtitle_size_pt: number
+  body_text_size_pt: number
+  footer_text_size_pt: number
+  paper_size: PaperSize
+  /** The word(s) that open the signature block, e.g. "Sincerely,". */
+  closing_phrase: string
+  /** The line printed under the signer's name, e.g. "Saharty Dental Clinic". */
+  signature_title_line: string
+  clinic_phone: string
+  clinic_email: string
+  clinic_address: string
+  clinic_website: string
+}
+
+export const DEFAULT_LETTERHEAD_SETTINGS: LetterheadSettings = {
+  logo_url: null,
+  logo_size_mm: 20,
+  clinic_name_size_pt: 15,
+  subtitle_size_pt: 11,
+  body_text_size_pt: 11,
+  footer_text_size_pt: 8,
+  paper_size: 'a4',
+  closing_phrase: 'Sincerely,',
+  signature_title_line: 'Saharty Dental Clinic',
+  clinic_phone: '(+2) 010 1515 1111  /  (+2) 02 3336 2222',
+  clinic_email: 'saharty@gmail.com',
+  clinic_address: '43 Kambiz St., Mosadak, Dokki — in front of Shooting Club Gate 10',
+  clinic_website: 'www.sahartydentalclinic.com',
+}
+
+/** Fills in any settings the DB row doesn't have yet (new fields added after rollout, or a fresh row). */
+export function mergeLetterheadSettings(partial: Partial<LetterheadSettings> | null | undefined): LetterheadSettings {
+  return { ...DEFAULT_LETTERHEAD_SETTINGS, ...(partial ?? {}) }
 }
 
 /** Distance in meters between two lat/lng points (haversine). */

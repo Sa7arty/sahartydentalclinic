@@ -1272,3 +1272,27 @@ with check (
 -- PDF to ~16MB when embedded directly) and a contact-info footer bar at the
 -- bottom of every page. See drawLetterheadHeader/drawLetterheadFooter in
 -- src/lib/pdf.ts.
+
+-- Full letterhead customization (Settings > Templates, 2026-09-15): one jsonb
+-- blob rather than typed columns, since it's a free-form design-settings
+-- object that will keep growing — see LetterheadSettings/DEFAULT_LETTERHEAD_SETTINGS
+-- in src/types.ts for the current shape (logo, header/footer/body text sizes,
+-- paper size, signature block, contact info) and mergeLetterheadSettings()
+-- for how missing keys (new fields added after a row was already saved) fall
+-- back to defaults. pdf.ts caches this via getLetterheadSettings() —
+-- Settings.tsx calls invalidateLetterheadCache() after every save.
+alter table public.app_settings add column if not exists letterhead_settings jsonb not null default '{}'::jsonb;
+
+-- Public bucket for clinic-owned assets the owner can customize themselves —
+-- currently just an optional custom logo (Settings > Templates > "Upload my
+-- own logo"). Public (not signed URLs) so pdf.ts can fetch it directly like
+-- the bundled default; only the dentist role can write to it.
+insert into storage.buckets (id, name, public) values ('clinic-assets', 'clinic-assets', true) on conflict (id) do nothing;
+create policy "public can read clinic assets" on storage.objects for select
+  using (bucket_id = 'clinic-assets');
+create policy "dentist manages clinic assets" on storage.objects for insert
+  with check (bucket_id = 'clinic-assets' and public.has_role(auth.uid(), 'dentist'));
+create policy "dentist updates clinic assets" on storage.objects for update
+  using (bucket_id = 'clinic-assets' and public.has_role(auth.uid(), 'dentist'));
+create policy "dentist deletes clinic assets" on storage.objects for delete
+  using (bucket_id = 'clinic-assets' and public.has_role(auth.uid(), 'dentist'));

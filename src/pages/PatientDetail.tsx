@@ -9,7 +9,7 @@ import PatientForm from '../components/PatientForm'
 import PatientBadges from '../components/PatientBadges'
 import ToothChart from '../components/ToothChart'
 import { exportLedgerStatementPdf, exportPrescriptionPdf, exportPaymentReceiptPdf, exportLetterPdf } from '../lib/pdf'
-import { LETTER_TEMPLATES, getLetterTemplate } from '../lib/letterTemplates'
+import { LETTER_TEMPLATES, getLetterTemplate, OTHER_OPTION, LetterFieldDef } from '../lib/letterTemplates'
 import { formatDate, formatDateTime, toDatetimeLocal } from '../lib/dates'
 import {
   Patient,
@@ -218,17 +218,22 @@ export default function PatientDetail() {
     const body = template.buildBody(patientFullName(patient), values)
     exportLetterPdf(title, patient, new Date().toLocaleDateString(), body, authorName)
   }
+  function resolvedLetterFieldValue(f: LetterFieldDef): string {
+    const raw = (letterValues[f.key] ?? f.defaultValue ?? '').trim()
+    if (f.allowOther && raw === OTHER_OPTION) return (letterValues[`${f.key}__other`] ?? '').trim()
+    return raw
+  }
   async function handleSaveLetter() {
     if (!id) return
     const template = getLetterTemplate(letterTemplateKey)
     if (!template) return
-    const missing = template.fields.filter((f) => f.required && !(letterValues[f.key] ?? f.defaultValue ?? '').trim())
+    const missing = template.fields.filter((f) => f.required && !resolvedLetterFieldValue(f))
     if (missing.length > 0) {
       alert(`Please fill in: ${missing.map((f) => f.label).join(', ')}`)
       return
     }
     const values: Record<string, string> = {}
-    for (const f of template.fields) values[f.key] = (letterValues[f.key] ?? f.defaultValue ?? '').trim()
+    for (const f of template.fields) values[f.key] = resolvedLetterFieldValue(f)
     const title = template.titleOverride ? template.titleOverride(values) : template.label
     const { error } = await supabase.from('patient_letters').insert({
       patient_id: id,
@@ -1596,6 +1601,15 @@ export default function PatientDetail() {
                               </option>
                             ))}
                           </select>
+                          {f.allowOther && value === OTHER_OPTION && (
+                            <input
+                              autoFocus
+                              value={letterValues[`${f.key}__other`] ?? ''}
+                              onChange={(e) => updateLetterField(`${f.key}__other`, e.target.value)}
+                              placeholder="Please specify…"
+                              className="mt-2 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm sm:max-w-sm"
+                            />
+                          )}
                         </div>
                       )
                     return (

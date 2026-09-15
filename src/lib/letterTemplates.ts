@@ -2,8 +2,17 @@
 // each auto-filled from a small set of fields so front-desk staff don't need
 // to type the boilerplate wording every time. Add a new letter type here and
 // it automatically appears in the patient file's Letters tab.
+//
+// Fields are dropdowns wherever the real-world answer set is small enough to
+// list — staff filling this in with a patient waiting shouldn't have to type
+// full sentences. A select field with `allowOther: true` always ends with the
+// OTHER_OPTION sentinel, which reveals a one-line free-text field in the UI
+// (PatientDetail.tsx) so nothing is ever truly a dead end.
 
 export type LetterFieldType = 'text' | 'textarea' | 'select' | 'number' | 'date'
+
+/** Sentinel last option on any `allowOther` select — picking it reveals a free-text field. */
+export const OTHER_OPTION = 'Other (please specify)'
 
 export interface LetterFieldDef {
   key: string
@@ -11,6 +20,8 @@ export interface LetterFieldDef {
   type: LetterFieldType
   placeholder?: string
   options?: string[]
+  /** Only meaningful for type 'select': picking OTHER_OPTION reveals a free-text input. */
+  allowOther?: boolean
   required?: boolean
   defaultValue?: string
 }
@@ -38,11 +49,51 @@ export const LETTER_TEMPLATES: LetterTemplateDef[] = [
         key: 'imaging_type',
         label: 'Imaging requested',
         type: 'select',
-        options: ['CBCT (Cone Beam CT)', 'Panoramic X-ray (OPG)', 'Periapical X-ray', 'Full CT scan', 'Other'],
+        options: ['CBCT (Cone Beam CT)', 'Panoramic X-ray (OPG)', 'Periapical X-ray', 'Full CT scan', OTHER_OPTION],
+        allowOther: true,
         required: true,
       },
-      { key: 'region', label: 'Region / tooth', type: 'text', placeholder: 'e.g. lower right molar region', required: true },
-      { key: 'reason', label: 'Clinical reason', type: 'textarea', placeholder: 'e.g. pre-implant planning, suspected impaction…', required: true },
+      {
+        key: 'region',
+        label: 'Region / tooth',
+        type: 'select',
+        options: [
+          'Upper right quadrant',
+          'Upper left quadrant',
+          'Lower right quadrant',
+          'Lower left quadrant',
+          'Upper arch (full)',
+          'Lower arch (full)',
+          'Full upper and lower arches',
+          'Anterior region (upper)',
+          'Anterior region (lower)',
+          'TMJ — right side',
+          'TMJ — left side',
+          'TMJ — both sides',
+          OTHER_OPTION,
+        ],
+        allowOther: true,
+        required: true,
+      },
+      {
+        key: 'reason',
+        label: 'Clinical reason',
+        type: 'select',
+        options: [
+          'Pre-implant planning',
+          'Suspected impaction',
+          'Endodontic evaluation',
+          'TMJ evaluation',
+          'Orthodontic evaluation',
+          'Third molar (wisdom tooth) evaluation',
+          'Pathology / lesion evaluation',
+          'Post-operative evaluation',
+          'Trauma evaluation',
+          OTHER_OPTION,
+        ],
+        allowOther: true,
+        required: true,
+      },
     ],
     buildBody: (patientName, v) => [
       'Dear Doctor,',
@@ -59,9 +110,68 @@ export const LETTER_TEMPLATES: LetterTemplateDef[] = [
     label: 'Referral to Physician / Medical Clearance Request',
     category: 'Referral',
     fields: [
-      { key: 'specialist_type', label: 'Specialist', type: 'text', placeholder: 'e.g. Cardiologist', required: true },
-      { key: 'planned_procedure', label: 'Planned dental procedure', type: 'text', placeholder: 'e.g. surgical extraction under local anesthesia', required: true },
-      { key: 'reason', label: 'Reason for referral', type: 'textarea', placeholder: "e.g. patient's cardiac history — requesting clearance before proceeding", required: true },
+      {
+        key: 'specialist_type',
+        label: 'Specialist',
+        type: 'select',
+        options: [
+          'Cardiologist',
+          'Endocrinologist (Diabetes)',
+          'Hematologist',
+          'Internal Medicine',
+          'ENT (Otolaryngologist)',
+          'Nephrologist',
+          'Pulmonologist',
+          'Rheumatologist',
+          'Oncologist',
+          'Obstetrician / Gynecologist',
+          'Pediatrician',
+          'Psychiatrist',
+          'General Physician',
+          OTHER_OPTION,
+        ],
+        allowOther: true,
+        required: true,
+      },
+      {
+        key: 'planned_procedure',
+        label: 'Planned dental procedure',
+        type: 'select',
+        options: [
+          'Surgical extraction',
+          'Simple extraction',
+          'Multiple extractions',
+          'Implant placement',
+          'Root canal treatment',
+          'Periodontal surgery',
+          'Crown / bridge preparation',
+          'Scaling and root planing',
+          'Orthodontic treatment',
+          'General dental treatment under sedation',
+          OTHER_OPTION,
+        ],
+        allowOther: true,
+        required: true,
+      },
+      {
+        key: 'reason',
+        label: 'Reason for referral',
+        type: 'select',
+        options: [
+          'Medical clearance before extraction',
+          'Medical clearance before surgical procedure',
+          'Medical clearance before implant placement',
+          'Anticoagulant / antiplatelet therapy review',
+          'Antibiotic prophylaxis recommendation',
+          'Uncontrolled diabetes management',
+          'Cardiac condition evaluation',
+          'Renal condition evaluation',
+          'Pregnancy-related precautions',
+          OTHER_OPTION,
+        ],
+        allowOther: true,
+        required: true,
+      },
     ],
     buildBody: (patientName, v) => [
       'Dear Doctor,',
@@ -84,10 +194,29 @@ export const LETTER_TEMPLATES: LetterTemplateDef[] = [
         key: 'specialist_type',
         label: 'Specialist',
         type: 'select',
-        options: ['Orthodontist', 'Periodontist', 'Endodontist', 'Oral & Maxillofacial Surgeon', 'Prosthodontist', 'Pediatric Dentist', 'Other'],
+        options: ['Orthodontist', 'Periodontist', 'Endodontist', 'Oral & Maxillofacial Surgeon', 'Prosthodontist', 'Pediatric Dentist', OTHER_OPTION],
+        allowOther: true,
         required: true,
       },
-      { key: 'reason', label: 'Reason for referral', type: 'textarea', placeholder: 'e.g. evaluation for orthodontic treatment', required: true },
+      {
+        key: 'reason',
+        label: 'Reason for referral',
+        type: 'select',
+        options: [
+          'Orthodontic evaluation and treatment',
+          'Periodontal evaluation and treatment',
+          'Root canal treatment (endodontic)',
+          'Surgical extraction / impacted tooth',
+          'Prosthodontic rehabilitation (crowns / bridges / dentures)',
+          'Pediatric dental care',
+          'Implant placement',
+          'TMJ disorder evaluation',
+          'Oral pathology evaluation',
+          OTHER_OPTION,
+        ],
+        allowOther: true,
+        required: true,
+      },
     ],
     buildBody: (patientName, v) => [
       'Dear Doctor,',
@@ -104,7 +233,24 @@ export const LETTER_TEMPLATES: LetterTemplateDef[] = [
     label: 'Medical Report & Rest Certificate',
     category: 'Medical report',
     fields: [
-      { key: 'procedure', label: 'Procedure performed', type: 'text', placeholder: 'e.g. surgical extraction of lower left third molar', required: true },
+      {
+        key: 'procedure',
+        label: 'Procedure performed',
+        type: 'select',
+        options: [
+          'Surgical extraction',
+          'Simple extraction',
+          'Multiple extractions',
+          'Root canal treatment',
+          'Implant placement',
+          'Periodontal surgery',
+          'Crown / bridge preparation',
+          'Impacted wisdom tooth removal',
+          OTHER_OPTION,
+        ],
+        allowOther: true,
+        required: true,
+      },
       { key: 'procedure_date', label: 'Procedure date', type: 'date', required: true },
       { key: 'rest_days', label: 'Rest days advised', type: 'number', placeholder: 'e.g. 2', required: true },
       { key: 'notes', label: 'Additional notes (optional)', type: 'textarea' },
@@ -125,7 +271,15 @@ export const LETTER_TEMPLATES: LetterTemplateDef[] = [
     fields: [
       { key: 'start_date', label: 'Leave start date', type: 'date', required: true },
       { key: 'leave_days', label: 'Number of days', type: 'number', placeholder: 'e.g. 2', required: true },
-      { key: 'purpose', label: 'Issued for', type: 'text', defaultValue: 'submission to the patient\'s employer', required: true },
+      {
+        key: 'purpose',
+        label: 'Issued for',
+        type: 'select',
+        options: ["submission to the patient's employer", "submission to the patient's school/university", 'official documentation', OTHER_OPTION],
+        allowOther: true,
+        defaultValue: "submission to the patient's employer",
+        required: true,
+      },
     ],
     buildBody: (patientName, v) => [
       `This is to certify that ${patientName} attended Saharty Dental Clinic and, due to a dental condition requiring treatment, is advised to take ${v.leave_days} day(s) of sick leave starting ${v.start_date}.`,
@@ -140,7 +294,15 @@ export const LETTER_TEMPLATES: LetterTemplateDef[] = [
     fields: [
       { key: 'procedure', label: 'Treatment performed', type: 'textarea', placeholder: 'e.g. root canal treatment on tooth #36, followed by crown placement', required: true },
       { key: 'amount', label: 'Total cost', type: 'text', placeholder: 'e.g. 5,000', required: true },
-      { key: 'purpose', label: 'Issued for', type: 'text', defaultValue: 'insurance reimbursement purposes', required: true },
+      {
+        key: 'purpose',
+        label: 'Issued for',
+        type: 'select',
+        options: ['insurance reimbursement purposes', "submission to the patient's employer", 'official documentation', OTHER_OPTION],
+        allowOther: true,
+        defaultValue: 'insurance reimbursement purposes',
+        required: true,
+      },
     ],
     buildBody: (patientName, v) => [
       `This is to confirm that ${patientName} underwent the following treatment at Saharty Dental Clinic: ${v.procedure}.`,
@@ -156,7 +318,15 @@ export const LETTER_TEMPLATES: LetterTemplateDef[] = [
     category: 'Administrative',
     fields: [
       { key: 'visit_dates', label: 'Visit date(s)', type: 'text', placeholder: 'e.g. 12/08/2026', required: true },
-      { key: 'purpose', label: 'Issued for', type: 'text', defaultValue: 'whom it may concern', required: true },
+      {
+        key: 'purpose',
+        label: 'Issued for',
+        type: 'select',
+        options: ['whom it may concern', "submission to the patient's employer", 'submission to school/university', 'insurance purposes', OTHER_OPTION],
+        allowOther: true,
+        defaultValue: 'whom it may concern',
+        required: true,
+      },
     ],
     buildBody: (patientName, v) => [
       `This is to certify that ${patientName} attended Saharty Dental Clinic on ${v.visit_dates} for dental treatment.`,

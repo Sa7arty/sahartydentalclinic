@@ -2,15 +2,30 @@ import { ChangeEvent, FormEvent, useEffect, useRef, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../context/AuthContext'
 import { useSettings } from '../context/SettingsContext'
-import { PatientGroup, ProcedureCategory, Procedure, ExpenseCategory, ExpenseItem, REQUIRABLE_PATIENT_FIELDS, ChartScope, CHART_SCOPE_LABELS, DiagnosisConditionDef, PaintType, PAINT_TYPE_LABELS } from '../types'
+import {
+  PatientGroup,
+  ProcedureCategory,
+  Procedure,
+  ExpenseCategory,
+  ExpenseItem,
+  REQUIRABLE_PATIENT_FIELDS,
+  ChartScope,
+  CHART_SCOPE_LABELS,
+  DiagnosisConditionDef,
+  PaintType,
+  PAINT_TYPE_LABELS,
+  LetterheadSettings,
+  PaperSize,
+} from '../types'
 import { WORLD_COUNTRIES } from '../data/countries'
 import { WEEKDAY_NAMES_FROM } from '../lib/dates'
 import { exportPatientsCsv, downloadPatientImportTemplate, importPatientsFromCsv } from '../lib/csv'
+import { invalidateLetterheadCache } from '../lib/pdf'
 
 const DURATION_OPTIONS = [15, 20, 30, 45, 60, 75, 90, 120]
 const WEEKDAY_FULL_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
 
-type Category = 'patients' | 'calendar' | 'procedures' | 'price-list' | 'financial' | 'attendance' | 'backup' | 'errors'
+type Category = 'patients' | 'calendar' | 'procedures' | 'price-list' | 'financial' | 'attendance' | 'templates' | 'backup' | 'errors'
 
 const CATEGORIES: { key: Category; label: string }[] = [
   { key: 'patients', label: 'Patients' },
@@ -19,8 +34,15 @@ const CATEGORIES: { key: Category; label: string }[] = [
   { key: 'price-list', label: 'Price list' },
   { key: 'financial', label: 'Financial' },
   { key: 'attendance', label: 'Attendance' },
+  { key: 'templates', label: 'Templates' },
   { key: 'backup', label: 'Backup & import' },
   { key: 'errors', label: 'Error log' },
+]
+
+const PAPER_SIZE_OPTIONS: { value: PaperSize; label: string }[] = [
+  { value: 'a4', label: 'A4 (210 × 297 mm) — standard' },
+  { value: 'a5', label: 'A5 (148 × 210 mm) — half sheet' },
+  { value: 'a6', label: 'A6 (105 × 148 mm) — small note / pad' },
 ]
 
 const DIAGNOSIS_SCOPE_OPTIONS: ChartScope[] = Object.keys(CHART_SCOPE_LABELS) as ChartScope[]
@@ -98,6 +120,10 @@ export default function Settings() {
 
   const [importing, setImporting] = useState(false)
   const [importSummary, setImportSummary] = useState<string | null>(null)
+
+  const [letterhead, setLetterhead] = useState<LetterheadSettings>(settings.letterhead_settings)
+  const [uploadingLogo, setUploadingLogo] = useState(false)
+  const [savingLetterhead, setSavingLetterhead] = useState(false)
 
   useEffect(() => {
     setRequiredFields(settings.required_fields)
@@ -382,6 +408,35 @@ export default function Settings() {
     setSavingAttendance(false)
     if (error) alert(error.message)
     else await refresh()
+  }
+
+  async function handleUploadLogo(e: ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setUploadingLogo(true)
+    const path = `logo-${Date.now()}-${file.name}`
+    const { error: uploadError } = await supabase.storage.from('clinic-assets').upload(path, file, { upsert: true })
+    if (uploadError) {
+      setUploadingLogo(false)
+      alert(uploadError.message)
+      return
+    }
+    const { data } = supabase.storage.from('clinic-assets').getPublicUrl(path)
+    setLetterhead((l) => ({ ...l, logo_url: data.publicUrl }))
+    setUploadingLogo(false)
+    e.target.value = ''
+  }
+
+  async function handleSaveLetterhead() {
+    setSavingLetterhead(true)
+    const { error } = await supabase.from('app_settings').update({ letterhead_settings: letterhead }).eq('id', true)
+    setSavingLetterhead(false)
+    if (error) {
+      alert(error.message)
+      return
+    }
+    invalidateLetterheadCache()
+    await refresh()
   }
   async function handleSavePatients(e: FormEvent<HTMLFormElement>) {
     e.preventDefault()
@@ -1037,6 +1092,198 @@ export default function Settings() {
             {savingAttendance ? 'Saving…' : 'Save'}
           </button>
         </form>
+      )}
+
+      {category === 'templates' && (
+        <div className="space-y-4">
+          <div className={card}>
+            <div>
+              <h2 className="font-medium text-navy-900">Logo &amp; header</h2>
+              <p className="text-sm text-slate-500">Every PDF the system exports — prescriptions, letters, receipts, payslips, reports — shares this same letterhead.</p>
+            </div>
+            <div className="flex flex-wrap items-center gap-4">
+              <img
+                src={letterhead.logo_url || '/logo-letterhead.png'}
+                alt="Clinic logo"
+                className="h-16 w-16 rounded-lg border border-slate-200 bg-white object-contain p-1"
+              />
+              <div className="flex flex-col gap-1.5">
+                <label className="w-fit cursor-pointer rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium text-navy-800 hover:bg-slate-50">
+                  {uploadingLogo ? 'Uploading…' : 'Upload my own logo'}
+                  <input type="file" accept="image/*" onChange={handleUploadLogo} disabled={uploadingLogo} className="hidden" />
+                </label>
+                {letterhead.logo_url && (
+                  <button
+                    type="button"
+                    onClick={() => setLetterhead((l) => ({ ...l, logo_url: null }))}
+                    className="w-fit text-xs text-slate-500 hover:underline"
+                  >
+                    Use the default Saharty logo instead
+                  </button>
+                )}
+              </div>
+            </div>
+
+            <div className="grid gap-4 sm:grid-cols-3">
+              <div>
+                <label className="mb-1 block text-sm text-slate-500">Logo size (mm)</label>
+                <input
+                  type="number"
+                  min={8}
+                  max={45}
+                  value={letterhead.logo_size_mm}
+                  onChange={(e) => setLetterhead((l) => ({ ...l, logo_size_mm: Number(e.target.value) }))}
+                  className="w-full rounded-lg border border-slate-300 px-3 py-2"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-sm text-slate-500">Clinic name text size (pt)</label>
+                <input
+                  type="number"
+                  min={8}
+                  max={30}
+                  value={letterhead.clinic_name_size_pt}
+                  onChange={(e) => setLetterhead((l) => ({ ...l, clinic_name_size_pt: Number(e.target.value) }))}
+                  className="w-full rounded-lg border border-slate-300 px-3 py-2"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-sm text-slate-500">Document subtitle text size (pt)</label>
+                <input
+                  type="number"
+                  min={6}
+                  max={20}
+                  value={letterhead.subtitle_size_pt}
+                  onChange={(e) => setLetterhead((l) => ({ ...l, subtitle_size_pt: Number(e.target.value) }))}
+                  className="w-full rounded-lg border border-slate-300 px-3 py-2"
+                />
+              </div>
+            </div>
+          </div>
+
+          <div className={card}>
+            <div>
+              <h2 className="font-medium text-navy-900">Footer / contact info</h2>
+              <p className="text-sm text-slate-500">Printed at the bottom of every page.</p>
+            </div>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div>
+                <label className="mb-1 block text-sm text-slate-500">Phone number(s)</label>
+                <input
+                  value={letterhead.clinic_phone}
+                  onChange={(e) => setLetterhead((l) => ({ ...l, clinic_phone: e.target.value }))}
+                  className="w-full rounded-lg border border-slate-300 px-3 py-2"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-sm text-slate-500">Email</label>
+                <input
+                  value={letterhead.clinic_email}
+                  onChange={(e) => setLetterhead((l) => ({ ...l, clinic_email: e.target.value }))}
+                  className="w-full rounded-lg border border-slate-300 px-3 py-2"
+                />
+              </div>
+              <div className="sm:col-span-2">
+                <label className="mb-1 block text-sm text-slate-500">Address</label>
+                <input
+                  value={letterhead.clinic_address}
+                  onChange={(e) => setLetterhead((l) => ({ ...l, clinic_address: e.target.value }))}
+                  className="w-full rounded-lg border border-slate-300 px-3 py-2"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-sm text-slate-500">Website</label>
+                <input
+                  value={letterhead.clinic_website}
+                  onChange={(e) => setLetterhead((l) => ({ ...l, clinic_website: e.target.value }))}
+                  className="w-full rounded-lg border border-slate-300 px-3 py-2"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-sm text-slate-500">Footer text size (pt)</label>
+                <input
+                  type="number"
+                  min={6}
+                  max={14}
+                  value={letterhead.footer_text_size_pt}
+                  onChange={(e) => setLetterhead((l) => ({ ...l, footer_text_size_pt: Number(e.target.value) }))}
+                  className="w-full rounded-lg border border-slate-300 px-3 py-2"
+                />
+              </div>
+            </div>
+            <p className="rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-500">
+              Preview: Tel: {letterhead.clinic_phone}&nbsp;&nbsp;&nbsp;Email: {letterhead.clinic_email}
+              <br />
+              Address: {letterhead.clinic_address}&nbsp;&nbsp;&nbsp;Website: {letterhead.clinic_website}
+            </p>
+          </div>
+
+          <div className={card}>
+            <div>
+              <h2 className="font-medium text-navy-900">Letter body &amp; signature</h2>
+              <p className="text-sm text-slate-500">Applies to documents in Patients → Letters.</p>
+            </div>
+            <div className="grid gap-4 sm:grid-cols-3">
+              <div>
+                <label className="mb-1 block text-sm text-slate-500">Body text size (pt)</label>
+                <input
+                  type="number"
+                  min={8}
+                  max={16}
+                  value={letterhead.body_text_size_pt}
+                  onChange={(e) => setLetterhead((l) => ({ ...l, body_text_size_pt: Number(e.target.value) }))}
+                  className="w-full rounded-lg border border-slate-300 px-3 py-2"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-sm text-slate-500">Closing phrase</label>
+                <input
+                  value={letterhead.closing_phrase}
+                  onChange={(e) => setLetterhead((l) => ({ ...l, closing_phrase: e.target.value }))}
+                  placeholder="e.g. Sincerely,"
+                  className="w-full rounded-lg border border-slate-300 px-3 py-2"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-sm text-slate-500">Line under the signer's name</label>
+                <input
+                  value={letterhead.signature_title_line}
+                  onChange={(e) => setLetterhead((l) => ({ ...l, signature_title_line: e.target.value }))}
+                  placeholder="e.g. Saharty Dental Clinic"
+                  className="w-full rounded-lg border border-slate-300 px-3 py-2"
+                />
+              </div>
+            </div>
+          </div>
+
+          <div className={card}>
+            <div>
+              <h2 className="font-medium text-navy-900">Paper size</h2>
+              <p className="text-sm text-slate-500">
+                Applies to every export. A5/A6 fit best for single-document letters, prescriptions, receipts and payslips — wide tables (reports, order summaries) stay readable on A4.
+              </p>
+            </div>
+            <select
+              value={letterhead.paper_size}
+              onChange={(e) => setLetterhead((l) => ({ ...l, paper_size: e.target.value as PaperSize }))}
+              className="w-full rounded-lg border border-slate-300 px-3 py-2 sm:max-w-sm"
+            >
+              {PAPER_SIZE_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <button
+            onClick={handleSaveLetterhead}
+            disabled={savingLetterhead}
+            className="rounded-lg bg-gold-500 px-4 py-2 text-sm font-medium text-navy-950 hover:bg-gold-400 disabled:opacity-50"
+          >
+            {savingLetterhead ? 'Saving…' : 'Save template settings'}
+          </button>
+        </div>
       )}
 
       {category === 'financial' && (

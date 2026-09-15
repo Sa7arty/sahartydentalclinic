@@ -1,68 +1,107 @@
 import jsPDF from 'jspdf'
-import { LedgerEntry, Patient, PrescriptionItem, patientFullName, PaymentMethod, PAYMENT_METHOD_LABELS } from '../types'
+import { supabase } from './supabase'
+import {
+  LedgerEntry,
+  Patient,
+  PrescriptionItem,
+  patientFullName,
+  PaymentMethod,
+  PAYMENT_METHOD_LABELS,
+  LetterheadSettings,
+  mergeLetterheadSettings,
+} from '../types'
 
 // ---------------------------------------------------------------------------
 // Shared letterhead — every PDF the clinic exports (receipts, prescriptions,
 // letters, payslips, inventory/staff reports, schedules…) uses the same logo
-// header and contact-info footer, matching the clinic's official letterhead.
+// header and contact-info footer, fully customizable from Settings > Templates.
 // ---------------------------------------------------------------------------
 
 const NAVY: [number, number, number] = [15, 23, 42]
 const GOLD: [number, number, number] = [180, 138, 66]
 const GRAY: [number, number, number] = [100, 116, 139]
 
-let logoDataUrlPromise: Promise<string | null> | null = null
+const DEFAULT_LOGO_PATH = '/logo-letterhead.png'
 
-/** Fetches the clinic's letterhead logo once per session and caches it as a data URL. */
-function getLogoDataUrl(): Promise<string | null> {
-  if (!logoDataUrlPromise) {
-    logoDataUrlPromise = fetch('/logo-letterhead.png')
-      .then((res) => res.blob())
-      .then(
-        (blob) =>
-          new Promise<string | null>((resolve) => {
-            const reader = new FileReader()
-            reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : null)
-            reader.onerror = () => resolve(null)
-            reader.readAsDataURL(blob)
-          }),
-      )
-      .catch(() => null)
+let settingsPromise: Promise<LetterheadSettings> | null = null
+const logoDataUrlCache = new Map<string, Promise<string | null>>()
+
+/** Fetches (and caches) the clinic's letterhead settings. Call invalidateLetterheadCache() after saving changes. */
+export function getLetterheadSettings(): Promise<LetterheadSettings> {
+  if (!settingsPromise) {
+    settingsPromise = (async () => {
+      try {
+        const { data } = await supabase.from('app_settings').select('letterhead_settings').single()
+        return mergeLetterheadSettings(data?.letterhead_settings)
+      } catch {
+        return mergeLetterheadSettings(null)
+      }
+    })()
   }
-  return logoDataUrlPromise
+  return settingsPromise
+}
+
+/** Clears the cached letterhead settings/logo — call this right after Settings > Templates saves changes. */
+export function invalidateLetterheadCache() {
+  settingsPromise = null
+  logoDataUrlCache.clear()
+}
+
+function fetchAsDataUrl(url: string): Promise<string | null> {
+  if (!logoDataUrlCache.has(url)) {
+    logoDataUrlCache.set(
+      url,
+      fetch(url)
+        .then((res) => res.blob())
+        .then(
+          (blob) =>
+            new Promise<string | null>((resolve) => {
+              const reader = new FileReader()
+              reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : null)
+              reader.onerror = () => resolve(null)
+              reader.readAsDataURL(blob)
+            }),
+        )
+        .catch(() => null),
+    )
+  }
+  return logoDataUrlCache.get(url)!
 }
 
 /** Draws the logo + clinic name + document subtitle at the top of the current page. Returns the y (mm) where body content should start. */
-async function drawLetterheadHeader(doc: jsPDF, subtitle: string): Promise<number> {
+async function drawLetterheadHeader(doc: jsPDF, subtitle: string, lh: LetterheadSettings): Promise<number> {
   const pageWidth = doc.internal.pageSize.getWidth()
-  const logo = await getLogoDataUrl()
-  const textX = logo ? 38 : 14
+  const logo = await fetchAsDataUrl(lh.logo_url || DEFAULT_LOGO_PATH)
+  const logoSize = lh.logo_size_mm
+  const textX = logo ? 14 + logoSize + 4 : 14
   if (logo) {
     try {
-      doc.addImage(logo, 'PNG', 14, 8, 20, 20)
+      doc.addImage(logo, 'PNG', 14, 8, logoSize, logoSize)
     } catch {
       // Corrupt/unavailable image data — fall back to text-only header.
     }
   }
+  const nameBaselineY = 8 + lh.clinic_name_size_pt * 0.5
   doc.setTextColor(...NAVY)
   doc.setFont('helvetica', 'bold')
-  doc.setFontSize(15)
-  doc.text('SAHARTY DENTAL CLINIC', textX, 17)
+  doc.setFontSize(lh.clinic_name_size_pt)
+  doc.text('SAHARTY DENTAL CLINIC', textX, nameBaselineY)
   doc.setFont('helvetica', 'normal')
-  doc.setFontSize(11)
+  doc.setFontSize(lh.subtitle_size_pt)
   doc.setTextColor(...GOLD)
-  doc.text(subtitle, textX, 24)
+  doc.text(subtitle, textX, nameBaselineY + lh.subtitle_size_pt * 0.6)
+  const dividerY = Math.max(32, 8 + logoSize + 4, nameBaselineY + lh.subtitle_size_pt * 0.6 + 6)
   doc.setDrawColor(...GOLD)
   doc.setLineWidth(0.6)
-  doc.line(14, 32, pageWidth - 14, 32)
+  doc.line(14, dividerY, pageWidth - 14, dividerY)
   doc.setTextColor(0, 0, 0)
   doc.setFont('helvetica', 'normal')
   doc.setFontSize(10)
-  return 42
+  return dividerY + 10
 }
 
 /** Draws the clinic's contact-info bar at the bottom of the current page. */
-function drawLetterheadFooter(doc: jsPDF) {
+function drawLetterheadFooter(doc: jsPDF, lh: LetterheadSettings) {
   const pageWidth = doc.internal.pageSize.getWidth()
   const pageHeight = doc.internal.pageSize.getHeight()
   const y = pageHeight - 16
@@ -70,47 +109,49 @@ function drawLetterheadFooter(doc: jsPDF) {
   doc.setLineWidth(0.4)
   doc.line(14, y, pageWidth - 14, y)
   doc.setFont('helvetica', 'normal')
-  doc.setFontSize(8)
+  doc.setFontSize(lh.footer_text_size_pt)
   doc.setTextColor(...GRAY)
-  doc.text('Tel: (+2) 010 1515 1111  /  (+2) 02 3336 2222    Email: saharty@gmail.com', pageWidth / 2, y + 5, { align: 'center' })
-  doc.text('43 Kambiz St., Mosadak, Dokki — in front of Shooting Club Gate 10    www.sahartydentalclinic.com', pageWidth / 2, y + 9.5, {
-    align: 'center',
-  })
+  doc.text(`Tel: ${lh.clinic_phone}    Email: ${lh.clinic_email}`, pageWidth / 2, y + 5, { align: 'center' })
+  doc.text(`Address: ${lh.clinic_address}    Website: ${lh.clinic_website}`, pageWidth / 2, y + 9.5, { align: 'center' })
   doc.setTextColor(0, 0, 0)
 }
 
 /** Stamps the footer on every page of the document — call once, right before doc.save(). */
-function finalizeLetterhead(doc: jsPDF) {
+function finalizeLetterhead(doc: jsPDF, lh: LetterheadSettings) {
   const pages = doc.getNumberOfPages()
   for (let i = 1; i <= pages; i++) {
     doc.setPage(i)
-    drawLetterheadFooter(doc)
+    drawLetterheadFooter(doc, lh)
   }
 }
 
 /** y (mm) to start content on a page AFTER the first (no logo header repeated). */
 const CONTINUATION_Y = 20
-/** Content must not run past this y (mm) on an A4 page — leaves room for the footer. */
-const PAGE_BREAK_Y = 263
+/** Content must not run past this y (mm) on a page of this height — leaves room for the footer. */
+function pageBreakY(doc: jsPDF) {
+  return doc.internal.pageSize.getHeight() - 34
+}
 
 export async function exportPaymentReceiptPdf(
   patient: Pick<Patient, 'first_name' | 'middle_name' | 'last_name' | 'file_number'>,
   entry: { amount: number; occurred_at: string; payment_method: PaymentMethod | null; description?: string | null },
   currency: string,
 ) {
-  const doc = new jsPDF()
+  const lh = await getLetterheadSettings()
+  const doc = new jsPDF({ unit: 'mm', format: lh.paper_size })
+  const right = doc.internal.pageSize.getWidth() - 14
   const receiptNo = new Date(entry.occurred_at).getTime().toString().slice(-8)
-  let y = await drawLetterheadHeader(doc, 'Payment Receipt')
+  let y = await drawLetterheadHeader(doc, 'Payment Receipt', lh)
 
   doc.setFontSize(9)
-  doc.text(`Receipt #${receiptNo}`, 196, y, { align: 'right' })
-  doc.text(`Printed: ${new Date().toLocaleString()}`, 196, y + 5, { align: 'right' })
+  doc.text(`Receipt #${receiptNo}`, right, y, { align: 'right' })
+  doc.text(`Printed: ${new Date().toLocaleString()}`, right, y + 5, { align: 'right' })
 
   doc.setFontSize(10)
   doc.text(`Patient: ${patientFullName(patient)}`, 14, y + 8)
   if (patient.file_number) doc.text(`File #: ${patient.file_number}`, 14, y + 14)
   doc.text(`Date received: ${new Date(entry.occurred_at).toLocaleString()}`, 14, y + 20)
-  doc.line(14, y + 26, 196, y + 26)
+  doc.line(14, y + 26, right, y + 26)
 
   y += 38
   doc.setFontSize(11)
@@ -125,27 +166,30 @@ export async function exportPaymentReceiptPdf(
   doc.text(`Payment method: ${entry.payment_method ? PAYMENT_METHOD_LABELS[entry.payment_method] : 'Not specified'}`, 14, y)
   if (entry.description) {
     y += 8
-    doc.text(doc.splitTextToSize(`Note: ${entry.description}`, 180), 14, y)
+    doc.text(doc.splitTextToSize(`Note: ${entry.description}`, right - 14), 14, y)
   }
 
   doc.setFontSize(9)
   doc.text('Thank you for your payment.', 14, 240)
-  doc.text('Signature: ____________________________', 120, 248)
+  doc.text('Signature: ____________________________', right - 76, 248)
 
-  finalizeLetterhead(doc)
+  finalizeLetterhead(doc, lh)
   doc.save(`receipt-${receiptNo}-${(patient.file_number ?? patientFullName(patient)).replace(/\s+/g, '-')}.pdf`)
 }
 
 export async function exportPrescriptionPdf(patient: Patient, prescriberName: string, items: PrescriptionItem[], notes: string, dateLabel: string) {
-  const doc = new jsPDF()
-  let y = await drawLetterheadHeader(doc, 'Prescription (Rx)')
+  const lh = await getLetterheadSettings()
+  const doc = new jsPDF({ unit: 'mm', format: lh.paper_size })
+  const right = doc.internal.pageSize.getWidth() - 14
+  const wrapWidth = right - 28
+  let y = await drawLetterheadHeader(doc, 'Prescription (Rx)', lh)
 
   doc.setFontSize(10)
   doc.text(`Patient: ${patientFullName(patient)}`, 14, y + 6)
   doc.text(`File #: ${patient.file_number ?? '-'}`, 14, y + 12)
-  doc.text(`Date: ${dateLabel}`, 140, y + 6)
-  if (prescriberName) doc.text(`Prescriber: ${prescriberName}`, 140, y + 12)
-  doc.line(14, y + 18, 196, y + 18)
+  doc.text(`Date: ${dateLabel}`, right - 56, y + 6)
+  if (prescriberName) doc.text(`Prescriber: ${prescriberName}`, right - 56, y + 12)
+  doc.line(14, y + 18, right, y + 18)
 
   y += 32
   doc.setFontSize(22)
@@ -155,7 +199,7 @@ export async function exportPrescriptionPdf(patient: Patient, prescriberName: st
 
   doc.setFontSize(11)
   items.forEach((it, i) => {
-    if (y > PAGE_BREAK_Y) {
+    if (y > pageBreakY(doc)) {
       doc.addPage()
       y = CONTINUATION_Y
     }
@@ -166,8 +210,8 @@ export async function exportPrescriptionPdf(patient: Patient, prescriberName: st
     if (it.instructions) {
       doc.setFont('helvetica', 'normal')
       doc.setFontSize(10)
-      doc.text(doc.splitTextToSize(it.instructions, 160), 28, y)
-      y += 6 * Math.max(1, doc.splitTextToSize(it.instructions, 160).length)
+      doc.text(doc.splitTextToSize(it.instructions, wrapWidth - 14), 28, y)
+      y += 6 * Math.max(1, doc.splitTextToSize(it.instructions, wrapWidth - 14).length)
       doc.setFontSize(11)
     }
     y += 3
@@ -180,14 +224,14 @@ export async function exportPrescriptionPdf(patient: Patient, prescriberName: st
     doc.text('Notes:', 14, y)
     doc.setFont('helvetica', 'normal')
     y += 6
-    doc.text(doc.splitTextToSize(notes, 180), 14, y)
-    y += 6 * doc.splitTextToSize(notes, 180).length
+    doc.text(doc.splitTextToSize(notes, wrapWidth), 14, y)
+    y += 6 * doc.splitTextToSize(notes, wrapWidth).length
   }
 
   doc.setFontSize(10)
-  doc.text('Signature: ____________________________', 130, 248)
+  doc.text('Signature: ____________________________', right - 66, 248)
 
-  finalizeLetterhead(doc)
+  finalizeLetterhead(doc, lh)
   doc.save(`prescription-${patient.file_number ?? patient.id}-${dateLabel.replace(/\//g, '-')}.pdf`)
 }
 
@@ -199,56 +243,62 @@ export async function exportLetterPdf(
   bodyParagraphs: string[],
   authorName: string,
 ) {
-  const doc = new jsPDF()
-  let y = await drawLetterheadHeader(doc, title)
+  const lh = await getLetterheadSettings()
+  const doc = new jsPDF({ unit: 'mm', format: lh.paper_size })
+  const right = doc.internal.pageSize.getWidth() - 14
+  const wrapWidth = right - 14
+  let y = await drawLetterheadHeader(doc, title, lh)
 
   doc.setFontSize(10)
-  doc.text(`Date: ${dateLabel}`, 196, y, { align: 'right' })
+  doc.text(`Date: ${dateLabel}`, right, y, { align: 'right' })
   doc.text(`Re: ${patientFullName(patient)}${patient.file_number ? ` (File #${patient.file_number})` : ''}`, 14, y)
   y += 10
-  doc.line(14, y, 196, y)
+  doc.line(14, y, right, y)
   y += 12
 
-  doc.setFontSize(11)
+  doc.setFontSize(lh.body_text_size_pt)
   for (const para of bodyParagraphs) {
     if (!para) {
       y += 5
       continue
     }
-    const lines = doc.splitTextToSize(para, 182)
+    const lines = doc.splitTextToSize(para, wrapWidth)
     for (const line of lines) {
-      if (y > PAGE_BREAK_Y) {
+      if (y > pageBreakY(doc)) {
         doc.addPage()
         y = CONTINUATION_Y
       }
       doc.text(line, 14, y)
-      y += 6
+      y += lh.body_text_size_pt * 0.55
     }
     y += 3
   }
 
   y += 10
-  if (y > PAGE_BREAK_Y - 24) {
+  if (y > pageBreakY(doc) - 24) {
     doc.addPage()
     y = CONTINUATION_Y
   }
-  doc.text('Sincerely,', 14, y)
+  doc.setFontSize(lh.body_text_size_pt)
+  doc.text(lh.closing_phrase, 14, y)
   y += 14
   doc.setFont('helvetica', 'bold')
-  doc.text(authorName || 'Saharty Dental Clinic', 14, y)
+  doc.text(authorName || lh.signature_title_line, 14, y)
   doc.setFont('helvetica', 'normal')
   y += 5
   doc.setFontSize(9)
-  doc.text('Saharty Dental Clinic', 14, y)
+  doc.text(lh.signature_title_line, 14, y)
 
-  finalizeLetterhead(doc)
+  finalizeLetterhead(doc, lh)
   doc.save(`letter-${title.replace(/\s+/g, '-').toLowerCase()}-${(patient.file_number ?? patientFullName(patient)).replace(/\s+/g, '-')}.pdf`)
 }
 
 export async function exportLedgerStatementPdf(patient: Patient, entries: LedgerEntry[]) {
-  const doc = new jsPDF()
+  const lh = await getLetterheadSettings()
+  const doc = new jsPDF({ unit: 'mm', format: lh.paper_size })
+  const right = doc.internal.pageSize.getWidth() - 14
   const balance = entries.reduce((sum, l) => sum + (l.entry_type === 'charge' ? Number(l.amount) : -Number(l.amount)), 0)
-  let y = await drawLetterheadHeader(doc, 'Patient Statement')
+  let y = await drawLetterheadHeader(doc, 'Patient Statement', lh)
 
   doc.setFontSize(10)
   doc.text(`Patient: ${patientFullName(patient)}`, 14, y + 4)
@@ -262,32 +312,32 @@ export async function exportLedgerStatementPdf(patient: Patient, entries: Ledger
   doc.text('Date', 14, y)
   doc.text('Description', 44, y)
   doc.text('Type', 140, y)
-  doc.text('Amount (EGP)', 165, y)
+  doc.text('Amount (EGP)', right, y, { align: 'right' })
   doc.setFont('helvetica', 'normal')
   y += 4
-  doc.line(14, y, 196, y)
+  doc.line(14, y, right, y)
   y += 6
 
   for (const entry of entries) {
-    if (y > PAGE_BREAK_Y) {
+    if (y > pageBreakY(doc)) {
       doc.addPage()
       y = CONTINUATION_Y
     }
     doc.text(new Date(entry.occurred_at).toLocaleDateString(), 14, y)
     doc.text((entry.description || (entry.entry_type === 'charge' ? 'Charge' : 'Payment')).slice(0, 45), 44, y)
     doc.text(entry.entry_type, 140, y)
-    doc.text(`${entry.entry_type === 'charge' ? '+' : '-'}${Number(entry.amount).toFixed(2)}`, 165, y)
+    doc.text(`${entry.entry_type === 'charge' ? '+' : '-'}${Number(entry.amount).toFixed(2)}`, right, y, { align: 'right' })
     y += 7
   }
 
   y += 6
-  doc.line(14, y, 196, y)
+  doc.line(14, y, right, y)
   y += 8
   doc.setFontSize(12)
   doc.setFont('helvetica', 'bold')
   doc.text(`Outstanding balance: EGP ${balance.toFixed(2)}`, 14, y)
 
-  finalizeLetterhead(doc)
+  finalizeLetterhead(doc, lh)
   doc.save(`statement-${patient.file_number ?? patient.id}.pdf`)
 }
 
@@ -315,14 +365,16 @@ export interface PayslipPdfData {
 }
 
 export async function exportPayslipPdf(d: PayslipPdfData) {
-  const doc = new jsPDF()
+  const lh = await getLetterheadSettings()
+  const doc = new jsPDF({ unit: 'mm', format: lh.paper_size })
+  const right = doc.internal.pageSize.getWidth() - 14
   const money = (n: number) => `${d.currency} ${n.toFixed(2)}`
-  let y = await drawLetterheadHeader(doc, 'Payslip')
+  let y = await drawLetterheadHeader(doc, 'Payslip', lh)
 
   doc.setFontSize(10)
   doc.text(`Employee: ${d.employeeName}`, 14, y + 4)
   if (d.position) doc.text(`Position: ${d.position}`, 14, y + 10)
-  doc.text(`Pay date: ${d.payDateLabel}`, 130, y + 4)
+  doc.text(`Pay date: ${d.payDateLabel}`, right - 66, y + 4)
   doc.text(`Attendance period: ${d.periodLabel}`, 14, y + 16)
   doc.text(`Bonuses earned: ${d.bonusPeriodLabel}`, 14, y + 22)
 
@@ -330,14 +382,14 @@ export async function exportPayslipPdf(d: PayslipPdfData) {
   const row = (label: string, value: string, bold = false) => {
     doc.setFont('helvetica', bold ? 'bold' : 'normal')
     doc.text(label, 14, y)
-    doc.text(value, 196, y, { align: 'right' })
+    doc.text(value, right, y, { align: 'right' })
     y += 7
   }
 
   doc.setFont('helvetica', 'bold')
   doc.text('Earnings', 14, y)
   y += 4
-  doc.line(14, y, 196, y)
+  doc.line(14, y, right, y)
   y += 8
   doc.setFont('helvetica', 'normal')
 
@@ -352,7 +404,7 @@ export async function exportPayslipPdf(d: PayslipPdfData) {
   if (d.roundingAdj && Math.abs(d.roundingAdj) >= 0.005) row('Rounding', `${d.roundingAdj > 0 ? '+' : '-'} ${money(Math.abs(d.roundingAdj))}`)
 
   y += 2
-  doc.line(14, y, 196, y)
+  doc.line(14, y, right, y)
   y += 8
   doc.setFontSize(12)
   row('Net pay', money(d.total), true)
@@ -361,38 +413,40 @@ export async function exportPayslipPdf(d: PayslipPdfData) {
   doc.setFont('helvetica', 'normal')
   doc.text('Base pay reflects attendance and paid leave. Overtime and profit-share are earned in the previous period and paid this month.', 14, y + 6)
 
-  finalizeLetterhead(doc)
+  finalizeLetterhead(doc, lh)
   doc.save(`payslip-${d.employeeName.replace(/\s+/g, '-')}-${d.payDateLabel.replace(/\//g, '-')}.pdf`)
 }
 
 export async function exportOrderSummaryPdf(title: string, monthLabel: string, lines: { name: string; brand: string; qty: number }[]) {
-  const doc = new jsPDF()
-  let y = await drawLetterheadHeader(doc, `Order Summary — ${title} — ${monthLabel}`)
+  const lh = await getLetterheadSettings()
+  const doc = new jsPDF({ unit: 'mm', format: lh.paper_size })
+  const right = doc.internal.pageSize.getWidth() - 14
+  let y = await drawLetterheadHeader(doc, `Order Summary — ${title} — ${monthLabel}`, lh)
 
   y += 8
   doc.setFontSize(10)
   doc.setFont('helvetica', 'bold')
   doc.text('Item', 14, y)
   doc.text('Brand', 120, y)
-  doc.text('Qty', 185, y, { align: 'right' })
+  doc.text('Qty', right, y, { align: 'right' })
   doc.setFont('helvetica', 'normal')
   y += 4
-  doc.line(14, y, 196, y)
+  doc.line(14, y, right, y)
   y += 6
 
   if (lines.length === 0) doc.text('Nothing to order — everything is stocked.', 14, y)
   for (const l of lines) {
-    if (y > PAGE_BREAK_Y) {
+    if (y > pageBreakY(doc)) {
       doc.addPage()
       y = CONTINUATION_Y
     }
     doc.text(l.name.slice(0, 60), 14, y)
     doc.text((l.brand || '').slice(0, 30), 120, y)
-    doc.text(String(l.qty), 185, y, { align: 'right' })
+    doc.text(String(l.qty), right, y, { align: 'right' })
     y += 7
   }
 
-  finalizeLetterhead(doc)
+  finalizeLetterhead(doc, lh)
   doc.save(`order-${title.replace(/\s+/g, '-')}-${monthLabel.replace(/\s+/g, '-')}.pdf`)
 }
 
@@ -400,9 +454,11 @@ export async function exportOutstandingBalancesPdf(
   currency: string,
   rows: { name: string; phone: string | null; lastActivity: string | null; balance: number }[],
 ) {
-  const doc = new jsPDF()
+  const lh = await getLetterheadSettings()
+  const doc = new jsPDF({ unit: 'mm', format: lh.paper_size })
+  const right = doc.internal.pageSize.getWidth() - 14
   const total = rows.reduce((s, r) => s + r.balance, 0)
-  let y = await drawLetterheadHeader(doc, 'Outstanding Balances')
+  let y = await drawLetterheadHeader(doc, 'Outstanding Balances', lh)
 
   doc.setFontSize(9)
   doc.text(`Printed: ${new Date().toLocaleString()}`, 14, y)
@@ -413,34 +469,34 @@ export async function exportOutstandingBalancesPdf(
   doc.text('Patient', 14, y)
   doc.text('Phone', 90, y)
   doc.text('Last activity', 132, y)
-  doc.text(`Owes (${currency})`, 196, y, { align: 'right' })
+  doc.text(`Owes (${currency})`, right, y, { align: 'right' })
   doc.setFont('helvetica', 'normal')
   y += 4
-  doc.line(14, y, 196, y)
+  doc.line(14, y, right, y)
   y += 6
 
   if (rows.length === 0) doc.text('No patient currently owes a balance.', 14, y)
   for (const r of rows) {
-    if (y > PAGE_BREAK_Y) {
+    if (y > pageBreakY(doc)) {
       doc.addPage()
       y = CONTINUATION_Y
     }
     doc.text(r.name.slice(0, 42), 14, y)
     doc.text((r.phone || '—').slice(0, 20), 90, y)
     doc.text(r.lastActivity || '—', 132, y)
-    doc.text(r.balance.toFixed(2), 196, y, { align: 'right' })
+    doc.text(r.balance.toFixed(2), right, y, { align: 'right' })
     y += 7
   }
 
   y += 2
-  doc.line(14, y, 196, y)
+  doc.line(14, y, right, y)
   y += 8
   doc.setFontSize(12)
   doc.setFont('helvetica', 'bold')
   doc.text(`Total outstanding: ${currency} ${total.toFixed(2)}`, 14, y)
-  doc.text(`${rows.length} patient(s)`, 196, y, { align: 'right' })
+  doc.text(`${rows.length} patient(s)`, right, y, { align: 'right' })
 
-  finalizeLetterhead(doc)
+  finalizeLetterhead(doc, lh)
   doc.save(`outstanding-balances-${new Date().toISOString().slice(0, 10)}.pdf`)
 }
 
@@ -449,8 +505,10 @@ export async function exportStaffSummaryPdf(
   currency: string,
   rows: { name: string; present: number; hours: number; overtime: number; late: number; paidLeave: number; absent: number; netPay: number }[],
 ) {
-  const doc = new jsPDF()
-  let y = await drawLetterheadHeader(doc, `Staff Summary — ${monthLabel}`)
+  const lh = await getLetterheadSettings()
+  const doc = new jsPDF({ unit: 'mm', format: lh.paper_size })
+  const right = doc.internal.pageSize.getWidth() - 14
+  let y = await drawLetterheadHeader(doc, `Staff Summary — ${monthLabel}`, lh)
   y += 6
 
   const header = () => {
@@ -463,17 +521,17 @@ export async function exportStaffSummaryPdf(
     doc.text('Late', 130, y, { align: 'right' })
     doc.text('Leave', 148, y, { align: 'right' })
     doc.text('Absent', 168, y, { align: 'right' })
-    doc.text(`Net (${currency})`, 196, y, { align: 'right' })
+    doc.text(`Net (${currency})`, right, y, { align: 'right' })
     doc.setFont('helvetica', 'normal')
     y += 4
-    doc.line(14, y, 196, y)
+    doc.line(14, y, right, y)
     y += 6
   }
   header()
 
   if (rows.length === 0) doc.text('No active staff.', 14, y)
   for (const r of rows) {
-    if (y > PAGE_BREAK_Y) {
+    if (y > pageBreakY(doc)) {
       doc.addPage()
       y = CONTINUATION_Y
       header()
@@ -485,20 +543,20 @@ export async function exportStaffSummaryPdf(
     doc.text(String(r.late), 130, y, { align: 'right' })
     doc.text(String(r.paidLeave), 148, y, { align: 'right' })
     doc.text(String(r.absent), 168, y, { align: 'right' })
-    doc.text(r.netPay.toFixed(2), 196, y, { align: 'right' })
+    doc.text(r.netPay.toFixed(2), right, y, { align: 'right' })
     y += 7
   }
 
   const totalNet = rows.reduce((s, r) => s + r.netPay, 0)
   y += 2
-  doc.line(14, y, 196, y)
+  doc.line(14, y, right, y)
   y += 8
   doc.setFontSize(11)
   doc.setFont('helvetica', 'bold')
   doc.text('Total payroll', 14, y)
-  doc.text(`${currency} ${totalNet.toFixed(2)}`, 196, y, { align: 'right' })
+  doc.text(`${currency} ${totalNet.toFixed(2)}`, right, y, { align: 'right' })
 
-  finalizeLetterhead(doc)
+  finalizeLetterhead(doc, lh)
   doc.save(`staff-summary-${monthLabel.replace(/\s+/g, '-')}.pdf`)
 }
 
@@ -513,8 +571,10 @@ export interface HuddleSheetRow {
 }
 
 export async function exportDailyHuddleSheetPdf(dateLabel: string, currency: string, rows: HuddleSheetRow[]) {
-  const doc = new jsPDF()
-  let y = await drawLetterheadHeader(doc, `Daily Huddle Sheet — ${dateLabel}`)
+  const lh = await getLetterheadSettings()
+  const doc = new jsPDF({ unit: 'mm', format: lh.paper_size })
+  const right = doc.internal.pageSize.getWidth() - 14
+  let y = await drawLetterheadHeader(doc, `Daily Huddle Sheet — ${dateLabel}`, lh)
   doc.setFontSize(9)
   doc.text(`Printed: ${new Date().toLocaleString()}`, 14, y)
   y += 12
@@ -526,17 +586,17 @@ export async function exportDailyHuddleSheetPdf(dateLabel: string, currency: str
     doc.text('Patient', 36, y)
     doc.text('Provider', 100, y)
     doc.text('Status', 138, y)
-    doc.text(`Balance (${currency})`, 196, y, { align: 'right' })
+    doc.text(`Balance (${currency})`, right, y, { align: 'right' })
     doc.setFont('helvetica', 'normal')
     y += 4
-    doc.line(14, y, 196, y)
+    doc.line(14, y, right, y)
     y += 6
   }
   header()
 
   if (rows.length === 0) doc.text('Nothing scheduled today.', 14, y)
   for (const r of rows) {
-    if (y > PAGE_BREAK_Y) {
+    if (y > pageBreakY(doc)) {
       doc.addPage()
       y = CONTINUATION_Y
       header()
@@ -546,7 +606,7 @@ export async function exportDailyHuddleSheetPdf(dateLabel: string, currency: str
     doc.text(`${r.patientName}${r.fileNumber ? ` (#${r.fileNumber})` : ''}`.slice(0, 42), 36, y)
     doc.text(r.provider.slice(0, 22), 100, y)
     doc.text(r.status, 138, y)
-    doc.text(r.balance.toFixed(2), 196, y, { align: 'right' })
+    doc.text(r.balance.toFixed(2), right, y, { align: 'right' })
     y += 6
     if (r.alerts) {
       doc.setFontSize(8)
@@ -558,13 +618,14 @@ export async function exportDailyHuddleSheetPdf(dateLabel: string, currency: str
     y += 2
   }
 
-  finalizeLetterhead(doc)
+  finalizeLetterhead(doc, lh)
   doc.save(`huddle-sheet-${dateLabel.replace(/\//g, '-')}.pdf`)
 }
 
 export async function exportDaySchedulePdf(dateLabel: string, visits: { time: string; patientName: string; status: string }[]) {
-  const doc = new jsPDF()
-  let y = await drawLetterheadHeader(doc, `Schedule — ${dateLabel}`)
+  const lh = await getLetterheadSettings()
+  const doc = new jsPDF({ unit: 'mm', format: lh.paper_size })
+  let y = await drawLetterheadHeader(doc, `Schedule — ${dateLabel}`, lh)
   y += 8
 
   doc.setFontSize(10)
@@ -572,7 +633,7 @@ export async function exportDaySchedulePdf(dateLabel: string, visits: { time: st
     doc.text('No visits scheduled.', 14, y)
   }
   for (const v of visits) {
-    if (y > PAGE_BREAK_Y) {
+    if (y > pageBreakY(doc)) {
       doc.addPage()
       y = CONTINUATION_Y
     }
@@ -580,6 +641,6 @@ export async function exportDaySchedulePdf(dateLabel: string, visits: { time: st
     y += 8
   }
 
-  finalizeLetterhead(doc)
+  finalizeLetterhead(doc, lh)
   doc.save(`schedule-${dateLabel}.pdf`)
 }
