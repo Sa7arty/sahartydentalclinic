@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
+import { confirmDialog } from '../lib/confirmDialog'
 import {
   Visit,
   Patient,
@@ -310,7 +311,7 @@ export default function Schedule() {
   }
 
   async function handleDeleteVisit(visitId: string) {
-    if (!confirm('Delete this appointment? This cannot be undone.')) return
+    if (!(await confirmDialog('Delete this appointment? This cannot be undone.'))) return
     deleteVisitFromGoogle(visitId)
     const { error } = await supabase.from('visits').delete().eq('id', visitId)
     if (error) alert(error.message)

@@ -1,5 +1,6 @@
 import { useEffect, useId, useMemo, useState } from 'react'
 import { supabase } from '../lib/supabase'
+import { confirmDialog } from '../lib/confirmDialog'
 import {
   ToothProcedure,
   ToothDiagnosis,
@@ -586,7 +587,7 @@ export default function ToothChart({ patientId }: { patientId: string }) {
     else load()
   }
   async function handleDeleteDiagnosis(id: string) {
-    if (!confirm('Delete this diagnosis entry? This cannot be undone.')) return
+    if (!(await confirmDialog('Delete this diagnosis entry? This cannot be undone.'))) return
     const { error } = await supabase.from('tooth_diagnoses').delete().eq('id', id)
     if (error) alert(error.message)
     else load()
@@ -749,7 +750,7 @@ export default function ToothChart({ patientId }: { patientId: string }) {
   }
 
   async function handleDeleteEntry(id: string) {
-    if (!confirm('Delete this chart entry? This cannot be undone.')) return
+    if (!(await confirmDialog('Delete this chart entry? This cannot be undone.'))) return
     const { error } = await supabase.from('tooth_procedures').delete().eq('id', id)
     if (error) alert(error.message)
     else load()

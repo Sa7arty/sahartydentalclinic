@@ -1,5 +1,6 @@
 import { FormEvent, Fragment, useEffect, useMemo, useState } from 'react'
 import { supabase } from '../lib/supabase'
+import { confirmDialog } from '../lib/confirmDialog'
 import { useAuth } from '../context/AuthContext'
 import { useSettings } from '../context/SettingsContext'
 import {
@@ -193,7 +194,7 @@ function EmployeesTab({
   }
 
   async function handleDelete(id: string) {
-    if (!confirm('Delete this employee and all their attendance records? This cannot be undone.')) return
+    if (!(await confirmDialog('Delete this employee and all their attendance records? This cannot be undone.'))) return
     const { error } = await supabase.from('employees').delete().eq('id', id)
     if (error) alert(error.message)
     else onEmployeesChanged()
@@ -208,7 +209,7 @@ function EmployeesTab({
   }
 
   async function handleDeleteProvider(id: string) {
-    if (!confirm('Delete this provider? Their history (visits, treatments) stays, just no longer linked to an active provider.')) return
+    if (!(await confirmDialog('Delete this provider? Their history (visits, treatments) stays, just no longer linked to an active provider.'))) return
     const { error } = await supabase.from('providers').delete().eq('id', id)
     if (error) alert(error.message)
     else onProvidersChanged()
@@ -1213,7 +1214,7 @@ function LeaveTab({ employees, settings }: { employees: Employee[]; settings: Ap
   }
 
   async function handleDelete(id: string) {
-    if (!confirm('Delete this leave record?')) return
+    if (!(await confirmDialog('Delete this leave record?'))) return
     const { error } = await supabase.from('employee_leave').delete().eq('id', id)
     if (error) alert(error.message)
     else loadLeaves()
@@ -1491,7 +1492,7 @@ function DeductionsTab({ employees, settings }: { employees: Employee[]; setting
       alert('This installment was taken by a finalized payroll and cannot be undone here.')
       return
     }
-    if (!confirm(`Undo this ${DEDUCTION_PAYMENT_LABELS[p.kind].toLowerCase()} of ${money(Number(p.amount))} on ${formatDate(p.paid_on)}?${d.kind === 'loan' ? ' Its income entry will also be removed.' : ''}`)) return
+    if (!(await confirmDialog(`Undo this ${DEDUCTION_PAYMENT_LABELS[p.kind].toLowerCase()} of ${money(Number(p.amount))} on ${formatDate(p.paid_on)}?${d.kind === 'loan' ? ' Its income entry will also be removed.' : ''}`))) return
     if (d.kind === 'loan') {
       const { data: linked } = await supabase.from('misc_income').delete().eq('deduction_payment_id', p.id).select('id')
       // Older repayments (recorded before payments were linked) are matched heuristically.
@@ -1516,12 +1517,12 @@ function DeductionsTab({ employees, settings }: { employees: Employee[]; setting
 
   async function handleSettleFull(d: EmployeeDeduction) {
     const remaining = Number(d.total_amount) - Number(d.amount_settled)
-    if (!confirm(`Settle the remaining ${formatMoney(remaining, settings)} in full?${d.kind === 'loan' ? ' It will be recorded as income.' : ''}`)) return
+    if (!(await confirmDialog(`Settle the remaining ${formatMoney(remaining, settings)} in full?${d.kind === 'loan' ? ' It will be recorded as income.' : ''}`))) return
     await recordPayment(d, remaining, toYmd(new Date()))
   }
 
   async function handleDelete(id: string) {
-    if (!confirm('Delete this record and its payment history entirely?')) return
+    if (!(await confirmDialog('Delete this record and its payment history entirely?'))) return
     const { error } = await supabase.from('employee_deductions').delete().eq('id', id)
     if (error) alert(error.message)
     else load()
@@ -1808,7 +1809,7 @@ function PayrollTab({ employees, settings, onChanged }: { employees: Employee[];
   async function handleFinalize() {
     if (run) return
     if (slips.length === 0) return alert('No employees to pay.')
-    if (!confirm(`Finalize payroll for ${payMonth.toLocaleString('en', { month: 'long', year: 'numeric' })}? This locks the payslips, advances any loan/deduction installments, and records the total as an expense.`)) return
+    if (!(await confirmDialog(`Finalize payroll for ${payMonth.toLocaleString('en', { month: 'long', year: 'numeric' })}? This locks the payslips, advances any loan/deduction installments, and records the total as an expense.`))) return
     setFinalizing(true)
     const payMonthYmd = `${payMonth.getFullYear()}-${String(payMonth.getMonth() + 1).padStart(2, '0')}-01`
     const totalAmount = slips.reduce((s, p) => s + p.total, 0)

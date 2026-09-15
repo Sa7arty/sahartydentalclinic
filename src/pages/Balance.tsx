@@ -1,6 +1,7 @@
 import { FormEvent, useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
+import { confirmDialog } from '../lib/confirmDialog'
 import { useAuth } from '../context/AuthContext'
 import { useSettings } from '../context/SettingsContext'
 import {
@@ -357,7 +358,7 @@ export default function Balance() {
   }
 
   async function handleStopRecurring(id: string) {
-    if (!confirm('Stop this recurring expense? Already-recorded expenses stay; no new ones will be created.')) return
+    if (!(await confirmDialog('Stop this recurring expense? Already-recorded expenses stay; no new ones will be created.'))) return
     const { error } = await supabase.from('recurring_expenses').update({ active: false }).eq('id', id)
     if (error) alert(error.message)
     else load()
@@ -387,7 +388,7 @@ export default function Balance() {
   }
 
   async function handleDeleteExpense(id: string) {
-    if (!confirm('Delete this expense? This cannot be undone.')) return
+    if (!(await confirmDialog('Delete this expense? This cannot be undone.'))) return
     const { error } = await supabase.from('expenses').delete().eq('id', id)
     if (error) alert(error.message)
     else load()
@@ -414,7 +415,7 @@ export default function Balance() {
   }
 
   async function handleDeleteMisc(id: string) {
-    if (!confirm('Delete this income entry? This cannot be undone.\n\nNote: if it came from a staff loan repayment and that loan still exists in HR, undo it from HR → Deductions instead so the loan balance stays correct.')) return
+    if (!(await confirmDialog('Delete this income entry? This cannot be undone.\n\nNote: if it came from a staff loan repayment and that loan still exists in HR, undo it from HR → Deductions instead so the loan balance stays correct.'))) return
     const { error } = await supabase.from('misc_income').delete().eq('id', id)
     if (error) alert(error.message)
     else load()

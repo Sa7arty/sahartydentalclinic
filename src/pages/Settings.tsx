@@ -1,5 +1,6 @@
 import { ChangeEvent, FormEvent, useEffect, useRef, useState } from 'react'
 import { supabase } from '../lib/supabase'
+import { confirmDialog } from '../lib/confirmDialog'
 import { useAuth } from '../context/AuthContext'
 import { useSettings } from '../context/SettingsContext'
 import {
@@ -266,7 +267,7 @@ export default function Settings() {
     }
   }
   async function handleDeleteExpenseCategory(id: string) {
-    if (!confirm('Delete this category and its items?')) return
+    if (!(await confirmDialog('Delete this category and its items?'))) return
     const { error } = await supabase.from('expense_categories').delete().eq('id', id)
     if (error) alert(error.message)
     else loadExpenseCategories()
@@ -311,7 +312,7 @@ export default function Settings() {
     else loadProcedureCategories()
   }
   async function handleDeleteProcCategory(id: string) {
-    if (!confirm('Delete this category? Procedures in it keep their name and price, they just become uncategorized.')) return
+    if (!(await confirmDialog('Delete this category? Procedures in it keep their name and price, they just become uncategorized.'))) return
     const { error } = await supabase.from('procedure_categories').delete().eq('id', id)
     if (error) alert(error.message)
     else {
@@ -330,7 +331,7 @@ export default function Settings() {
     loadProcedures()
   }
   async function handleDeleteProcedure(id: string) {
-    if (!confirm('Delete this procedure?')) return
+    if (!(await confirmDialog('Delete this procedure?'))) return
     const { error } = await supabase.from('procedures').delete().eq('id', id)
     if (error) alert(error.message)
     else loadProcedures()
@@ -354,7 +355,7 @@ export default function Settings() {
     loadDiagnosisConditions()
   }
   async function handleDeleteDiagnosisCondition(id: string) {
-    if (!confirm('Delete this diagnosis condition? Past diagnoses that used it keep their name and stay visible, just no longer linked to this entry.')) return
+    if (!(await confirmDialog('Delete this diagnosis condition? Past diagnoses that used it keep their name and stay visible, just no longer linked to this entry.'))) return
     const { error } = await supabase.from('diagnosis_conditions').delete().eq('id', id)
     if (error) alert(error.message)
     else loadDiagnosisConditions()

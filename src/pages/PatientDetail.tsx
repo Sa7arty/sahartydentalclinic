@@ -1,6 +1,7 @@
 import { FormEvent, useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
+import { confirmDialog } from '../lib/confirmDialog'
 import { syncVisitToGoogle, deleteVisitFromGoogle } from '../lib/googleCalendarSync'
 import { useAuth } from '../context/AuthContext'
 import { useSettings } from '../context/SettingsContext'
@@ -201,7 +202,7 @@ export default function PatientDetail() {
     if (patient) exportPrescriptionPdf(patient, p.prescriber_name || '', p.items || [], p.notes || '', new Date(p.created_at).toLocaleDateString())
   }
   async function handleDeletePrescription(pid: string) {
-    if (!confirm('Delete this prescription? This cannot be undone.')) return
+    if (!(await confirmDialog('Delete this prescription? This cannot be undone.'))) return
     const { error } = await supabase.from('prescriptions').delete().eq('id', pid)
     if (error) alert(error.message)
     else if (id) load(id)
@@ -254,7 +255,7 @@ export default function PatientDetail() {
     printLetter(l.letter_type, l.field_values, l.author_name || '')
   }
   async function handleDeleteLetter(lid: string) {
-    if (!confirm('Delete this letter? This cannot be undone.')) return
+    if (!(await confirmDialog('Delete this letter? This cannot be undone.'))) return
     const { error } = await supabase.from('patient_letters').delete().eq('id', lid)
     if (error) alert(error.message)
     else if (id) load(id)
@@ -282,7 +283,7 @@ export default function PatientDetail() {
 
   async function handleDeletePatient() {
     if (!id || !patient) return
-    if (!confirm(`Permanently delete ${patientFullName(patient)}'s file and all their visits, notes, ledger and records? This cannot be undone.`)) return
+    if (!(await confirmDialog(`Permanently delete ${patientFullName(patient)}'s file and all their visits, notes, ledger and records? This cannot be undone.`))) return
     const { error } = await supabase.from('patients').delete().eq('id', id)
     if (error) alert(error.message)
     else navigate('/patients')
@@ -353,7 +354,7 @@ export default function PatientDetail() {
 
   async function handleDeleteVisit(visitId: string) {
     if (!id) return
-    if (!confirm('Delete this appointment? This cannot be undone.')) return
+    if (!(await confirmDialog('Delete this appointment? This cannot be undone.'))) return
     deleteVisitFromGoogle(visitId)
     const { error } = await supabase.from('visits').delete().eq('id', visitId)
     if (!error) {
@@ -484,7 +485,7 @@ export default function PatientDetail() {
   }
 
   async function handleDeletePhoto(photo: PatientPhoto) {
-    if (!confirm('Delete this document? This cannot be undone.')) return
+    if (!(await confirmDialog('Delete this document? This cannot be undone.'))) return
     await supabase.storage.from('patient-photos').remove([photo.storage_path])
     const { error } = await supabase.from('patient_photos').delete().eq('id', photo.id)
     if (error) alert(error.message)
@@ -628,7 +629,7 @@ export default function PatientDetail() {
 
   async function handleDeleteLedgerEntry(entryId: string) {
     if (!id) return
-    if (!confirm('Delete this ledger entry? This cannot be undone.')) return
+    if (!(await confirmDialog('Delete this ledger entry? This cannot be undone.'))) return
     const { error } = await supabase.from('ledger_entries').delete().eq('id', entryId)
     if (!error) load(id)
     else alert(error.message)
@@ -659,7 +660,7 @@ export default function PatientDetail() {
 
   async function handleDeleteClinicCost(costId: string) {
     if (!id) return
-    if (!confirm('Delete this clinic cost? This cannot be undone.')) return
+    if (!(await confirmDialog('Delete this clinic cost? This cannot be undone.'))) return
     const { error } = await supabase.from('expenses').delete().eq('id', costId)
     if (!error) load(id)
     else alert(error.message)

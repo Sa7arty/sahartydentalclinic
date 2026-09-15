@@ -1,5 +1,6 @@
 import { FormEvent, useEffect, useMemo, useState } from 'react'
 import { supabase } from '../lib/supabase'
+import { confirmDialog } from '../lib/confirmDialog'
 import { useAuth } from '../context/AuthContext'
 import {
   Inventory as InventoryType,
@@ -173,7 +174,7 @@ export default function Inventory() {
   }
 
   async function handleDeleteItem(id: string) {
-    if (!confirm('Delete this item and its count history?')) return
+    if (!(await confirmDialog('Delete this item and its count history?'))) return
     const { error } = await supabase.from('inventory_items').delete().eq('id', id)
     if (error) alert(error.message)
     else loadStructure()
@@ -227,7 +228,7 @@ export default function Inventory() {
   }
 
   async function handleDeleteCluster(id: string) {
-    if (!confirm('Delete this storage location and all its items?')) return
+    if (!(await confirmDialog('Delete this storage location and all its items?'))) return
     const { error } = await supabase.from('inventory_clusters').delete().eq('id', id)
     if (error) alert(error.message)
     else loadStructure()
