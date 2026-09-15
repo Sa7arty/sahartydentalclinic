@@ -292,13 +292,21 @@ export interface LetterheadSettings {
   logo_size_mm: number
   clinic_name_size_pt: number
   subtitle_size_pt: number
+  /** Minimum header height (mm) — the header still grows automatically if the logo/text need more room. */
+  header_height_mm: number
+  /** Base text size for every export's main content — table rows, letter paragraphs, prescription items. */
   body_text_size_pt: number
+  /** The "Patient: … / File #… / Date: …"-style line every export prints under the header. */
+  meta_info_size_pt: number
   footer_text_size_pt: number
+  /** Vertical gap (mm) between the two footer lines. */
+  footer_line_gap_mm: number
   paper_size: PaperSize
   /** The word(s) that open the signature block, e.g. "Sincerely,". */
   closing_phrase: string
   /** The line printed under the signer's name, e.g. "Saharty Dental Clinic". */
   signature_title_line: string
+  signature_title_size_pt: number
   clinic_phone: string
   clinic_email: string
   clinic_address: string
@@ -310,11 +318,15 @@ export const DEFAULT_LETTERHEAD_SETTINGS: LetterheadSettings = {
   logo_size_mm: 20,
   clinic_name_size_pt: 15,
   subtitle_size_pt: 11,
+  header_height_mm: 32,
   body_text_size_pt: 11,
+  meta_info_size_pt: 10,
   footer_text_size_pt: 8,
+  footer_line_gap_mm: 8,
   paper_size: 'a4',
   closing_phrase: 'Sincerely,',
   signature_title_line: 'Saharty Dental Clinic',
+  signature_title_size_pt: 9,
   clinic_phone: '(+2) 010 1515 1111  /  (+2) 02 3336 2222',
   clinic_email: 'saharty@gmail.com',
   clinic_address: '43 Kambiz St., Mosadak, Dokki — in front of Shooting Club Gate 10',

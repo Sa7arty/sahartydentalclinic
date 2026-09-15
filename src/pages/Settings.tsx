@@ -1158,6 +1158,30 @@ export default function Settings() {
                   className="w-full rounded-lg border border-slate-300 px-3 py-2"
                 />
               </div>
+              <div>
+                <label className="mb-1 block text-sm text-slate-500">Header height (mm)</label>
+                <input
+                  type="number"
+                  min={20}
+                  max={70}
+                  value={letterhead.header_height_mm}
+                  onChange={(e) => setLetterhead((l) => ({ ...l, header_height_mm: Number(e.target.value) }))}
+                  className="w-full rounded-lg border border-slate-300 px-3 py-2"
+                />
+                <p className="mt-0.5 text-[11px] text-slate-400">Grows automatically if the logo or text need more room than this.</p>
+              </div>
+              <div>
+                <label className="mb-1 block text-sm text-slate-500">Patient name &amp; date text size (pt)</label>
+                <input
+                  type="number"
+                  min={7}
+                  max={18}
+                  value={letterhead.meta_info_size_pt}
+                  onChange={(e) => setLetterhead((l) => ({ ...l, meta_info_size_pt: Number(e.target.value) }))}
+                  className="w-full rounded-lg border border-slate-300 px-3 py-2"
+                />
+                <p className="mt-0.5 text-[11px] text-slate-400">The "Patient / File # / Date" line under the header on every export.</p>
+              </div>
             </div>
           </div>
 
@@ -1210,22 +1234,42 @@ export default function Settings() {
                   className="w-full rounded-lg border border-slate-300 px-3 py-2"
                 />
               </div>
+              <div>
+                <label className="mb-1 block text-sm text-slate-500">Footer height / row spacing (mm)</label>
+                <input
+                  type="number"
+                  min={4}
+                  max={20}
+                  value={letterhead.footer_line_gap_mm}
+                  onChange={(e) => setLetterhead((l) => ({ ...l, footer_line_gap_mm: Number(e.target.value) }))}
+                  className="w-full rounded-lg border border-slate-300 px-3 py-2"
+                />
+                <p className="mt-0.5 text-[11px] text-slate-400">Space between the phone/email line and the address/website line.</p>
+              </div>
             </div>
-            <p className="rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-500">
-              Preview: Tel: {letterhead.clinic_phone}&nbsp;&nbsp;&nbsp;Email: {letterhead.clinic_email}
-              <br />
-              Address: {letterhead.clinic_address}&nbsp;&nbsp;&nbsp;Website: {letterhead.clinic_website}
-            </p>
+            <div className="rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-500">
+              <p>Preview:</p>
+              <p>
+                Tel: {letterhead.clinic_phone}&nbsp;&nbsp;&nbsp;Email: {letterhead.clinic_email}
+              </p>
+              <div style={{ height: `${letterhead.footer_line_gap_mm * 2}px` }} />
+              <p>
+                Address: {letterhead.clinic_address}&nbsp;&nbsp;&nbsp;Website: {letterhead.clinic_website}
+              </p>
+            </div>
           </div>
 
           <div className={card}>
             <div>
-              <h2 className="font-medium text-navy-900">Letter body &amp; signature</h2>
-              <p className="text-sm text-slate-500">Applies to documents in Patients → Letters.</p>
+              <h2 className="font-medium text-navy-900">Body text &amp; signature</h2>
+              <p className="text-sm text-slate-500">
+                Body text size applies to every export — table rows in reports, prescription items, receipts, payslips, and Letters paragraphs. The closing
+                phrase and signature line apply to Patients → Letters only.
+              </p>
             </div>
-            <div className="grid gap-4 sm:grid-cols-3">
+            <div className="grid gap-4 sm:grid-cols-2">
               <div>
-                <label className="mb-1 block text-sm text-slate-500">Body text size (pt)</label>
+                <label className="mb-1 block text-sm text-slate-500">Body / table text size (pt)</label>
                 <input
                   type="number"
                   min={8}
@@ -1250,6 +1294,17 @@ export default function Settings() {
                   value={letterhead.signature_title_line}
                   onChange={(e) => setLetterhead((l) => ({ ...l, signature_title_line: e.target.value }))}
                   placeholder="e.g. Saharty Dental Clinic"
+                  className="w-full rounded-lg border border-slate-300 px-3 py-2"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-sm text-slate-500">Size of that line (pt)</label>
+                <input
+                  type="number"
+                  min={6}
+                  max={16}
+                  value={letterhead.signature_title_size_pt}
+                  onChange={(e) => setLetterhead((l) => ({ ...l, signature_title_size_pt: Number(e.target.value) }))}
                   className="w-full rounded-lg border border-slate-300 px-3 py-2"
                 />
               </div>

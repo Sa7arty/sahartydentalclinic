@@ -14,7 +14,9 @@ import {
 // ---------------------------------------------------------------------------
 // Shared letterhead — every PDF the clinic exports (receipts, prescriptions,
 // letters, payslips, inventory/staff reports, schedules…) uses the same logo
-// header and contact-info footer, fully customizable from Settings > Templates.
+// header, contact-info footer, and base text sizes, all customizable from
+// Settings > Templates. Every export fetches the SAME settings object below,
+// so a change there really does apply everywhere — not just to Letters.
 // ---------------------------------------------------------------------------
 
 const NAVY: [number, number, number] = [15, 23, 42]
@@ -90,29 +92,57 @@ async function drawLetterheadHeader(doc: jsPDF, subtitle: string, lh: Letterhead
   doc.setFontSize(lh.subtitle_size_pt)
   doc.setTextColor(...GOLD)
   doc.text(subtitle, textX, nameBaselineY + lh.subtitle_size_pt * 0.6)
-  const dividerY = Math.max(32, 8 + logoSize + 4, nameBaselineY + lh.subtitle_size_pt * 0.6 + 6)
+  // The header always grows to fit the logo/text, but the owner's configured
+  // height (Settings > Templates) can make it taller than that minimum.
+  const minForLogo = 8 + logoSize + 4
+  const minForText = nameBaselineY + lh.subtitle_size_pt * 0.6 + 6
+  const dividerY = Math.max(lh.header_height_mm, minForLogo, minForText)
   doc.setDrawColor(...GOLD)
   doc.setLineWidth(0.6)
   doc.line(14, dividerY, pageWidth - 14, dividerY)
   doc.setTextColor(0, 0, 0)
   doc.setFont('helvetica', 'normal')
-  doc.setFontSize(10)
   return dividerY + 10
+}
+
+/**
+ * Splits the footer's two info lines further if the configured text size (or
+ * a long phone/address) would otherwise overflow the page width — e.g. a
+ * large footer_text_size_pt with the full address+website combined can run
+ * off both edges. Recomputed per page since paper size affects the width.
+ */
+function computeFooterLines(doc: jsPDF, lh: LetterheadSettings): string[] {
+  const maxWidth = doc.internal.pageSize.getWidth() - 28
+  doc.setFont('helvetica', 'normal')
+  doc.setFontSize(lh.footer_text_size_pt)
+  const contactLine = `Tel: ${lh.clinic_phone}    Email: ${lh.clinic_email}`
+  const addressLine = `Address: ${lh.clinic_address}    Website: ${lh.clinic_website}`
+  const lines: string[] = []
+  if (doc.getTextWidth(contactLine) > maxWidth) lines.push(`Tel: ${lh.clinic_phone}`, `Email: ${lh.clinic_email}`)
+  else lines.push(contactLine)
+  if (doc.getTextWidth(addressLine) > maxWidth) lines.push(`Address: ${lh.clinic_address}`, `Website: ${lh.clinic_website}`)
+  else lines.push(addressLine)
+  return lines
+}
+
+/** mm reserved at the bottom of the page for the footer (divider + lines + safety margin). */
+function footerReserveMm(doc: jsPDF, lh: LetterheadSettings) {
+  return 8 + lh.footer_line_gap_mm * computeFooterLines(doc, lh).length
 }
 
 /** Draws the clinic's contact-info bar at the bottom of the current page. */
 function drawLetterheadFooter(doc: jsPDF, lh: LetterheadSettings) {
   const pageWidth = doc.internal.pageSize.getWidth()
   const pageHeight = doc.internal.pageSize.getHeight()
-  const y = pageHeight - 16
+  const lines = computeFooterLines(doc, lh)
+  const dividerY = pageHeight - (8 + lh.footer_line_gap_mm * lines.length)
   doc.setDrawColor(...GOLD)
   doc.setLineWidth(0.4)
-  doc.line(14, y, pageWidth - 14, y)
-  doc.setFont('helvetica', 'normal')
-  doc.setFontSize(lh.footer_text_size_pt)
+  doc.line(14, dividerY, pageWidth - 14, dividerY)
   doc.setTextColor(...GRAY)
-  doc.text(`Tel: ${lh.clinic_phone}    Email: ${lh.clinic_email}`, pageWidth / 2, y + 5, { align: 'center' })
-  doc.text(`Address: ${lh.clinic_address}    Website: ${lh.clinic_website}`, pageWidth / 2, y + 9.5, { align: 'center' })
+  lines.forEach((line, i) => {
+    doc.text(line, pageWidth / 2, dividerY + lh.footer_line_gap_mm * (i + 1), { align: 'center' })
+  })
   doc.setTextColor(0, 0, 0)
 }
 
@@ -128,8 +158,8 @@ function finalizeLetterhead(doc: jsPDF, lh: LetterheadSettings) {
 /** y (mm) to start content on a page AFTER the first (no logo header repeated). */
 const CONTINUATION_Y = 20
 /** Content must not run past this y (mm) on a page of this height — leaves room for the footer. */
-function pageBreakY(doc: jsPDF) {
-  return doc.internal.pageSize.getHeight() - 34
+function pageBreakY(doc: jsPDF, lh: LetterheadSettings) {
+  return doc.internal.pageSize.getHeight() - footerReserveMm(doc, lh) - 6
 }
 
 export async function exportPaymentReceiptPdf(
@@ -143,33 +173,33 @@ export async function exportPaymentReceiptPdf(
   const receiptNo = new Date(entry.occurred_at).getTime().toString().slice(-8)
   let y = await drawLetterheadHeader(doc, 'Payment Receipt', lh)
 
-  doc.setFontSize(9)
+  doc.setFontSize(lh.meta_info_size_pt - 1)
   doc.text(`Receipt #${receiptNo}`, right, y, { align: 'right' })
   doc.text(`Printed: ${new Date().toLocaleString()}`, right, y + 5, { align: 'right' })
 
-  doc.setFontSize(10)
+  doc.setFontSize(lh.meta_info_size_pt)
   doc.text(`Patient: ${patientFullName(patient)}`, 14, y + 8)
   if (patient.file_number) doc.text(`File #: ${patient.file_number}`, 14, y + 14)
   doc.text(`Date received: ${new Date(entry.occurred_at).toLocaleString()}`, 14, y + 20)
   doc.line(14, y + 26, right, y + 26)
 
   y += 38
-  doc.setFontSize(11)
+  doc.setFontSize(lh.body_text_size_pt)
   doc.text('Received with thanks:', 14, y)
   y += 12
-  doc.setFontSize(20)
+  doc.setFontSize(lh.body_text_size_pt + 9)
   doc.setFont('helvetica', 'bold')
   doc.text(`${currency} ${Number(entry.amount).toFixed(2)}`, 14, y)
   doc.setFont('helvetica', 'normal')
   y += 10
-  doc.setFontSize(11)
+  doc.setFontSize(lh.body_text_size_pt)
   doc.text(`Payment method: ${entry.payment_method ? PAYMENT_METHOD_LABELS[entry.payment_method] : 'Not specified'}`, 14, y)
   if (entry.description) {
     y += 8
     doc.text(doc.splitTextToSize(`Note: ${entry.description}`, right - 14), 14, y)
   }
 
-  doc.setFontSize(9)
+  doc.setFontSize(Math.max(7, lh.body_text_size_pt - 2))
   doc.text('Thank you for your payment.', 14, 240)
   doc.text('Signature: ____________________________', right - 76, 248)
 
@@ -184,7 +214,7 @@ export async function exportPrescriptionPdf(patient: Patient, prescriberName: st
   const wrapWidth = right - 28
   let y = await drawLetterheadHeader(doc, 'Prescription (Rx)', lh)
 
-  doc.setFontSize(10)
+  doc.setFontSize(lh.meta_info_size_pt)
   doc.text(`Patient: ${patientFullName(patient)}`, 14, y + 6)
   doc.text(`File #: ${patient.file_number ?? '-'}`, 14, y + 12)
   doc.text(`Date: ${dateLabel}`, right - 56, y + 6)
@@ -192,14 +222,14 @@ export async function exportPrescriptionPdf(patient: Patient, prescriberName: st
   doc.line(14, y + 18, right, y + 18)
 
   y += 32
-  doc.setFontSize(22)
+  doc.setFontSize(lh.body_text_size_pt + 11)
   doc.setFont('helvetica', 'bold')
   doc.text('℞', 14, y)
   doc.setFont('helvetica', 'normal')
 
-  doc.setFontSize(11)
+  doc.setFontSize(lh.body_text_size_pt)
   items.forEach((it, i) => {
-    if (y > pageBreakY(doc)) {
+    if (y > pageBreakY(doc, lh)) {
       doc.addPage()
       y = CONTINUATION_Y
     }
@@ -209,10 +239,10 @@ export async function exportPrescriptionPdf(patient: Patient, prescriberName: st
     y += 6
     if (it.instructions) {
       doc.setFont('helvetica', 'normal')
-      doc.setFontSize(10)
+      doc.setFontSize(Math.max(7, lh.body_text_size_pt - 1))
       doc.text(doc.splitTextToSize(it.instructions, wrapWidth - 14), 28, y)
       y += 6 * Math.max(1, doc.splitTextToSize(it.instructions, wrapWidth - 14).length)
-      doc.setFontSize(11)
+      doc.setFontSize(lh.body_text_size_pt)
     }
     y += 3
   })
@@ -220,7 +250,7 @@ export async function exportPrescriptionPdf(patient: Patient, prescriberName: st
   if (notes) {
     y += 4
     doc.setFont('helvetica', 'bold')
-    doc.setFontSize(10)
+    doc.setFontSize(Math.max(7, lh.body_text_size_pt - 1))
     doc.text('Notes:', 14, y)
     doc.setFont('helvetica', 'normal')
     y += 6
@@ -228,7 +258,7 @@ export async function exportPrescriptionPdf(patient: Patient, prescriberName: st
     y += 6 * doc.splitTextToSize(notes, wrapWidth).length
   }
 
-  doc.setFontSize(10)
+  doc.setFontSize(lh.meta_info_size_pt)
   doc.text('Signature: ____________________________', right - 66, 248)
 
   finalizeLetterhead(doc, lh)
@@ -249,7 +279,7 @@ export async function exportLetterPdf(
   const wrapWidth = right - 14
   let y = await drawLetterheadHeader(doc, title, lh)
 
-  doc.setFontSize(10)
+  doc.setFontSize(lh.meta_info_size_pt)
   doc.text(`Date: ${dateLabel}`, right, y, { align: 'right' })
   doc.text(`Re: ${patientFullName(patient)}${patient.file_number ? ` (File #${patient.file_number})` : ''}`, 14, y)
   y += 10
@@ -264,7 +294,7 @@ export async function exportLetterPdf(
     }
     const lines = doc.splitTextToSize(para, wrapWidth)
     for (const line of lines) {
-      if (y > pageBreakY(doc)) {
+      if (y > pageBreakY(doc, lh)) {
         doc.addPage()
         y = CONTINUATION_Y
       }
@@ -275,7 +305,7 @@ export async function exportLetterPdf(
   }
 
   y += 10
-  if (y > pageBreakY(doc) - 24) {
+  if (y > pageBreakY(doc, lh) - 24) {
     doc.addPage()
     y = CONTINUATION_Y
   }
@@ -286,7 +316,7 @@ export async function exportLetterPdf(
   doc.text(authorName || lh.signature_title_line, 14, y)
   doc.setFont('helvetica', 'normal')
   y += 5
-  doc.setFontSize(9)
+  doc.setFontSize(lh.signature_title_size_pt)
   doc.text(lh.signature_title_line, 14, y)
 
   finalizeLetterhead(doc, lh)
@@ -300,29 +330,34 @@ export async function exportLedgerStatementPdf(patient: Patient, entries: Ledger
   const balance = entries.reduce((sum, l) => sum + (l.entry_type === 'charge' ? Number(l.amount) : -Number(l.amount)), 0)
   let y = await drawLetterheadHeader(doc, 'Patient Statement', lh)
 
-  doc.setFontSize(10)
+  doc.setFontSize(lh.meta_info_size_pt)
   doc.text(`Patient: ${patientFullName(patient)}`, 14, y + 4)
   doc.text(`File #: ${patient.file_number ?? '-'}`, 14, y + 10)
   doc.text(`Phone: ${patient.phone ?? '-'}`, 14, y + 16)
   doc.text(`Printed: ${new Date().toLocaleString()}`, 14, y + 22)
-
   y += 36
-  doc.setFontSize(10)
-  doc.setFont('helvetica', 'bold')
-  doc.text('Date', 14, y)
-  doc.text('Description', 44, y)
-  doc.text('Type', 140, y)
-  doc.text('Amount (EGP)', right, y, { align: 'right' })
-  doc.setFont('helvetica', 'normal')
-  y += 4
-  doc.line(14, y, right, y)
-  y += 6
+
+  const header = () => {
+    doc.setFontSize(lh.body_text_size_pt)
+    doc.setFont('helvetica', 'bold')
+    doc.text('Date', 14, y)
+    doc.text('Description', 44, y)
+    doc.text('Type', 140, y)
+    doc.text('Amount (EGP)', right, y, { align: 'right' })
+    doc.setFont('helvetica', 'normal')
+    y += 4
+    doc.line(14, y, right, y)
+    y += 6
+  }
+  header()
 
   for (const entry of entries) {
-    if (y > pageBreakY(doc)) {
+    if (y > pageBreakY(doc, lh)) {
       doc.addPage()
       y = CONTINUATION_Y
+      header()
     }
+    doc.setFontSize(lh.body_text_size_pt)
     doc.text(new Date(entry.occurred_at).toLocaleDateString(), 14, y)
     doc.text((entry.description || (entry.entry_type === 'charge' ? 'Charge' : 'Payment')).slice(0, 45), 44, y)
     doc.text(entry.entry_type, 140, y)
@@ -333,7 +368,7 @@ export async function exportLedgerStatementPdf(patient: Patient, entries: Ledger
   y += 6
   doc.line(14, y, right, y)
   y += 8
-  doc.setFontSize(12)
+  doc.setFontSize(lh.body_text_size_pt + 1)
   doc.setFont('helvetica', 'bold')
   doc.text(`Outstanding balance: EGP ${balance.toFixed(2)}`, 14, y)
 
@@ -371,7 +406,7 @@ export async function exportPayslipPdf(d: PayslipPdfData) {
   const money = (n: number) => `${d.currency} ${n.toFixed(2)}`
   let y = await drawLetterheadHeader(doc, 'Payslip', lh)
 
-  doc.setFontSize(10)
+  doc.setFontSize(lh.meta_info_size_pt)
   doc.text(`Employee: ${d.employeeName}`, 14, y + 4)
   if (d.position) doc.text(`Position: ${d.position}`, 14, y + 10)
   doc.text(`Pay date: ${d.payDateLabel}`, right - 66, y + 4)
@@ -379,6 +414,7 @@ export async function exportPayslipPdf(d: PayslipPdfData) {
   doc.text(`Bonuses earned: ${d.bonusPeriodLabel}`, 14, y + 22)
 
   y += 38
+  doc.setFontSize(lh.body_text_size_pt)
   const row = (label: string, value: string, bold = false) => {
     doc.setFont('helvetica', bold ? 'bold' : 'normal')
     doc.text(label, 14, y)
@@ -406,10 +442,10 @@ export async function exportPayslipPdf(d: PayslipPdfData) {
   y += 2
   doc.line(14, y, right, y)
   y += 8
-  doc.setFontSize(12)
+  doc.setFontSize(lh.body_text_size_pt + 1)
   row('Net pay', money(d.total), true)
 
-  doc.setFontSize(8)
+  doc.setFontSize(Math.max(7, lh.body_text_size_pt - 3))
   doc.setFont('helvetica', 'normal')
   doc.text('Base pay reflects attendance and paid leave. Overtime and profit-share are earned in the previous period and paid this month.', 14, y + 6)
 
@@ -422,24 +458,32 @@ export async function exportOrderSummaryPdf(title: string, monthLabel: string, l
   const doc = new jsPDF({ unit: 'mm', format: lh.paper_size })
   const right = doc.internal.pageSize.getWidth() - 14
   let y = await drawLetterheadHeader(doc, `Order Summary — ${title} — ${monthLabel}`, lh)
-
   y += 8
-  doc.setFontSize(10)
-  doc.setFont('helvetica', 'bold')
-  doc.text('Item', 14, y)
-  doc.text('Brand', 120, y)
-  doc.text('Qty', right, y, { align: 'right' })
-  doc.setFont('helvetica', 'normal')
-  y += 4
-  doc.line(14, y, right, y)
-  y += 6
 
-  if (lines.length === 0) doc.text('Nothing to order — everything is stocked.', 14, y)
+  const header = () => {
+    doc.setFontSize(lh.body_text_size_pt)
+    doc.setFont('helvetica', 'bold')
+    doc.text('Item', 14, y)
+    doc.text('Brand', 120, y)
+    doc.text('Qty', right, y, { align: 'right' })
+    doc.setFont('helvetica', 'normal')
+    y += 4
+    doc.line(14, y, right, y)
+    y += 6
+  }
+  header()
+
+  if (lines.length === 0) {
+    doc.setFontSize(lh.body_text_size_pt)
+    doc.text('Nothing to order — everything is stocked.', 14, y)
+  }
   for (const l of lines) {
-    if (y > pageBreakY(doc)) {
+    if (y > pageBreakY(doc, lh)) {
       doc.addPage()
       y = CONTINUATION_Y
+      header()
     }
+    doc.setFontSize(lh.body_text_size_pt)
     doc.text(l.name.slice(0, 60), 14, y)
     doc.text((l.brand || '').slice(0, 30), 120, y)
     doc.text(String(l.qty), right, y, { align: 'right' })
@@ -460,27 +504,35 @@ export async function exportOutstandingBalancesPdf(
   const total = rows.reduce((s, r) => s + r.balance, 0)
   let y = await drawLetterheadHeader(doc, 'Outstanding Balances', lh)
 
-  doc.setFontSize(9)
+  doc.setFontSize(lh.meta_info_size_pt - 1)
   doc.text(`Printed: ${new Date().toLocaleString()}`, 14, y)
-
   y += 12
-  doc.setFontSize(10)
-  doc.setFont('helvetica', 'bold')
-  doc.text('Patient', 14, y)
-  doc.text('Phone', 90, y)
-  doc.text('Last activity', 132, y)
-  doc.text(`Owes (${currency})`, right, y, { align: 'right' })
-  doc.setFont('helvetica', 'normal')
-  y += 4
-  doc.line(14, y, right, y)
-  y += 6
 
-  if (rows.length === 0) doc.text('No patient currently owes a balance.', 14, y)
+  const header = () => {
+    doc.setFontSize(lh.body_text_size_pt)
+    doc.setFont('helvetica', 'bold')
+    doc.text('Patient', 14, y)
+    doc.text('Phone', 90, y)
+    doc.text('Last activity', 132, y)
+    doc.text(`Owes (${currency})`, right, y, { align: 'right' })
+    doc.setFont('helvetica', 'normal')
+    y += 4
+    doc.line(14, y, right, y)
+    y += 6
+  }
+  header()
+
+  if (rows.length === 0) {
+    doc.setFontSize(lh.body_text_size_pt)
+    doc.text('No patient currently owes a balance.', 14, y)
+  }
   for (const r of rows) {
-    if (y > pageBreakY(doc)) {
+    if (y > pageBreakY(doc, lh)) {
       doc.addPage()
       y = CONTINUATION_Y
+      header()
     }
+    doc.setFontSize(lh.body_text_size_pt)
     doc.text(r.name.slice(0, 42), 14, y)
     doc.text((r.phone || '—').slice(0, 20), 90, y)
     doc.text(r.lastActivity || '—', 132, y)
@@ -491,7 +543,7 @@ export async function exportOutstandingBalancesPdf(
   y += 2
   doc.line(14, y, right, y)
   y += 8
-  doc.setFontSize(12)
+  doc.setFontSize(lh.body_text_size_pt + 1)
   doc.setFont('helvetica', 'bold')
   doc.text(`Total outstanding: ${currency} ${total.toFixed(2)}`, 14, y)
   doc.text(`${rows.length} patient(s)`, right, y, { align: 'right' })
@@ -512,7 +564,7 @@ export async function exportStaffSummaryPdf(
   y += 6
 
   const header = () => {
-    doc.setFontSize(9)
+    doc.setFontSize(Math.max(7, lh.body_text_size_pt - 2))
     doc.setFont('helvetica', 'bold')
     doc.text('Employee', 14, y)
     doc.text('Present', 78, y, { align: 'right' })
@@ -529,13 +581,17 @@ export async function exportStaffSummaryPdf(
   }
   header()
 
-  if (rows.length === 0) doc.text('No active staff.', 14, y)
+  if (rows.length === 0) {
+    doc.setFontSize(Math.max(7, lh.body_text_size_pt - 2))
+    doc.text('No active staff.', 14, y)
+  }
   for (const r of rows) {
-    if (y > pageBreakY(doc)) {
+    if (y > pageBreakY(doc, lh)) {
       doc.addPage()
       y = CONTINUATION_Y
       header()
     }
+    doc.setFontSize(Math.max(7, lh.body_text_size_pt - 2))
     doc.text(r.name.slice(0, 32), 14, y)
     doc.text(String(r.present), 78, y, { align: 'right' })
     doc.text(r.hours.toFixed(1), 98, y, { align: 'right' })
@@ -551,7 +607,7 @@ export async function exportStaffSummaryPdf(
   y += 2
   doc.line(14, y, right, y)
   y += 8
-  doc.setFontSize(11)
+  doc.setFontSize(lh.body_text_size_pt)
   doc.setFont('helvetica', 'bold')
   doc.text('Total payroll', 14, y)
   doc.text(`${currency} ${totalNet.toFixed(2)}`, right, y, { align: 'right' })
@@ -575,12 +631,12 @@ export async function exportDailyHuddleSheetPdf(dateLabel: string, currency: str
   const doc = new jsPDF({ unit: 'mm', format: lh.paper_size })
   const right = doc.internal.pageSize.getWidth() - 14
   let y = await drawLetterheadHeader(doc, `Daily Huddle Sheet — ${dateLabel}`, lh)
-  doc.setFontSize(9)
+  doc.setFontSize(lh.meta_info_size_pt - 1)
   doc.text(`Printed: ${new Date().toLocaleString()}`, 14, y)
   y += 12
 
   const header = () => {
-    doc.setFontSize(9)
+    doc.setFontSize(Math.max(7, lh.body_text_size_pt - 2))
     doc.setFont('helvetica', 'bold')
     doc.text('Time', 14, y)
     doc.text('Patient', 36, y)
@@ -594,14 +650,17 @@ export async function exportDailyHuddleSheetPdf(dateLabel: string, currency: str
   }
   header()
 
-  if (rows.length === 0) doc.text('Nothing scheduled today.', 14, y)
+  if (rows.length === 0) {
+    doc.setFontSize(Math.max(7, lh.body_text_size_pt - 2))
+    doc.text('Nothing scheduled today.', 14, y)
+  }
   for (const r of rows) {
-    if (y > pageBreakY(doc)) {
+    if (y > pageBreakY(doc, lh)) {
       doc.addPage()
       y = CONTINUATION_Y
       header()
     }
-    doc.setFontSize(9)
+    doc.setFontSize(Math.max(7, lh.body_text_size_pt - 2))
     doc.text(r.time, 14, y)
     doc.text(`${r.patientName}${r.fileNumber ? ` (#${r.fileNumber})` : ''}`.slice(0, 42), 36, y)
     doc.text(r.provider.slice(0, 22), 100, y)
@@ -609,7 +668,7 @@ export async function exportDailyHuddleSheetPdf(dateLabel: string, currency: str
     doc.text(r.balance.toFixed(2), right, y, { align: 'right' })
     y += 6
     if (r.alerts) {
-      doc.setFontSize(8)
+      doc.setFontSize(Math.max(6, lh.body_text_size_pt - 3))
       doc.setTextColor(180, 40, 40)
       doc.text(`⚠ ${r.alerts}`.slice(0, 100), 36, y)
       doc.setTextColor(0, 0, 0)
@@ -628,12 +687,12 @@ export async function exportDaySchedulePdf(dateLabel: string, visits: { time: st
   let y = await drawLetterheadHeader(doc, `Schedule — ${dateLabel}`, lh)
   y += 8
 
-  doc.setFontSize(10)
+  doc.setFontSize(lh.body_text_size_pt)
   if (visits.length === 0) {
     doc.text('No visits scheduled.', 14, y)
   }
   for (const v of visits) {
-    if (y > pageBreakY(doc)) {
+    if (y > pageBreakY(doc, lh)) {
       doc.addPage()
       y = CONTINUATION_Y
     }

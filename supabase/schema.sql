@@ -1296,3 +1296,15 @@ create policy "dentist updates clinic assets" on storage.objects for update
   using (bucket_id = 'clinic-assets' and public.has_role(auth.uid(), 'dentist'));
 create policy "dentist deletes clinic assets" on storage.objects for delete
   using (bucket_id = 'clinic-assets' and public.has_role(auth.uid(), 'dentist'));
+
+-- Letterhead settings follow-up (2026-09-15): added header_height_mm,
+-- meta_info_size_pt (the "Patient / Date" line size — previously hardcoded),
+-- footer_line_gap_mm (space between the two footer lines — also now used to
+-- push a 3rd/4th footer line in if the configured footer_text_size_pt would
+-- otherwise overflow the page width, see computeFooterLines in pdf.ts), and
+-- signature_title_size_pt. No migration needed — same jsonb column,
+-- mergeLetterheadSettings() in types.ts fills these in for existing rows.
+-- Also fixed: body_text_size_pt now drives every export's content text (not
+-- just Letters), and the table-header row now repeats on every page for
+-- ledger statements / order summaries / outstanding balances (previously
+-- only staff summary and the huddle sheet did this correctly).
