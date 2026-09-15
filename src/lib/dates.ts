@@ -52,6 +52,13 @@ export function dayEnd(ymd: string): Date {
   return new Date(`${ymd}T23:59:59.999`)
 }
 
+/** Local-time Date for a day + minutes-since-midnight (e.g. from a Schedule grid click/drop). */
+export function ymdAndMinutesToDate(ymd: string, minutesFromMidnight: number): Date {
+  const d = fromYmd(ymd)
+  d.setMinutes(minutesFromMidnight)
+  return d
+}
+
 // ---- Consistent dd/mm/yyyy display formatting across the whole app ----
 
 function pad(n: number): string {

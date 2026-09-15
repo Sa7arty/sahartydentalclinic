@@ -20,7 +20,20 @@ import {
 } from '../types'
 import { useAuth } from '../context/AuthContext'
 import { useSettings } from '../context/SettingsContext'
-import { toYmd, fromYmd, addDays, addMonths, startOfWeek, startOfMonth, endOfMonth, dayStart, dayEnd, toDatetimeLocal, WEEKDAY_NAMES_FROM } from '../lib/dates'
+import {
+  toYmd,
+  fromYmd,
+  addDays,
+  addMonths,
+  startOfWeek,
+  startOfMonth,
+  endOfMonth,
+  dayStart,
+  dayEnd,
+  toDatetimeLocal,
+  ymdAndMinutesToDate,
+  WEEKDAY_NAMES_FROM,
+} from '../lib/dates'
 import { exportDaySchedulePdf } from '../lib/pdf'
 import PatientBadges from '../components/PatientBadges'
 import { syncVisitToGoogle, deleteVisitFromGoogle } from '../lib/googleCalendarSync'
@@ -42,12 +55,16 @@ function addMinutes(iso: string, minutes: number) {
 
 // --- Hour-grid week view (Google-Calendar-style) --------------------------
 
-const HOUR_HEIGHT = 56 // px per hour row
-const GRID_HOURS = Array.from({ length: 24 }, (_, i) => i)
+const HOUR_HEIGHT = 80 // px per hour row (4 x 20px quarter-hour rows)
+const QUARTER_HEIGHT = HOUR_HEIGHT / 4
+const GRID_QUARTERS = Array.from({ length: 96 }, (_, i) => i) // 15-min slots across a day
 
-function hourLabel(hour: number) {
+function quarterLabel(quarterIndex: number) {
+  const totalMinutes = quarterIndex * 15
+  const hour = Math.floor(totalMinutes / 60)
+  const minute = totalMinutes % 60
   const h12 = hour % 12 === 0 ? 12 : hour % 12
-  return `${h12}:00 ${hour < 12 ? 'AM' : 'PM'}`
+  return `${h12}:${String(minute).padStart(2, '0')} ${hour < 12 ? 'AM' : 'PM'}`
 }
 
 function minutesFromMidnight(iso: string) {
@@ -59,6 +76,12 @@ function minutesFromMidnight(iso: string) {
 function parseHHMM(hhmm: string) {
   const [h, m] = hhmm.split(':').map(Number)
   return (h || 0) * 60 + (m || 0)
+}
+
+/** Pixel-Y within a day column -> the 15-min slot it falls in, as minutes since midnight. */
+function pxToSnappedMinutes(offsetY: number) {
+  const rawMinutes = (offsetY / HOUR_HEIGHT) * 60
+  return Math.max(0, Math.min(23 * 60 + 45, Math.round(rawMinutes / 15) * 15))
 }
 
 function dayHoursFor(businessHours: BusinessHours, ymd: string): DayHours {
@@ -164,6 +187,21 @@ export default function Schedule() {
   async function handleChangeStatus(visitId: string, status: VisitStatus) {
     setVisits((cur) => cur.map((v) => (v.id === visitId ? { ...v, status } : v)))
     const { error } = await supabase.from('visits').update({ status }).eq('id', visitId)
+    if (error) alert(error.message)
+    else syncVisitToGoogle(visitId)
+  }
+
+  /** Double-clicked an empty grid slot — jump into the existing Add Visit flow with the date/time prefilled. */
+  function handleCreateVisitAt(ymd: string, minutesFromMidnight: number) {
+    const scheduledAt = ymdAndMinutesToDate(ymd, minutesFromMidnight).toISOString()
+    navigate('/schedule/new-visit', { state: { prefillScheduledAt: scheduledAt } })
+  }
+
+  /** Dragged an appointment block to a new slot (and possibly a new day, in Week view). */
+  async function handleReschedule(visitId: string, targetYmd: string, minutesFromMidnight: number) {
+    const scheduledAt = ymdAndMinutesToDate(targetYmd, minutesFromMidnight).toISOString()
+    setVisits((cur) => cur.map((v) => (v.id === visitId ? { ...v, scheduled_at: scheduledAt } : v)))
+    const { error } = await supabase.from('visits').update({ scheduled_at: scheduledAt }).eq('id', visitId)
     if (error) alert(error.message)
     else syncVisitToGoogle(visitId)
   }
@@ -311,6 +349,8 @@ export default function Schedule() {
           today={today}
           onEdit={setEditingVisit}
           onChangeStatus={handleChangeStatus}
+          onCreateVisit={handleCreateVisitAt}
+          onReschedule={handleReschedule}
           conditionIds={conditionIds}
           elderlyThreshold={settings.elderly_age_threshold}
         />
@@ -323,6 +363,8 @@ export default function Schedule() {
           businessHours={settings.business_hours}
           onSelectDay={jumpToDay}
           onEdit={setEditingVisit}
+          onCreateVisit={handleCreateVisitAt}
+          onReschedule={handleReschedule}
           conditionIds={conditionIds}
           elderlyThreshold={settings.elderly_age_threshold}
         />
@@ -467,13 +509,17 @@ function VisitTimeRange({ v }: { v: VisitRow }) {
 
 /** One day's column of positioned appointment blocks, shared by the Day and Week grids.
  * `compact` (week) keeps blocks narrow with click-to-edit only; the full-width day view
- * additionally shows call/WhatsApp icons and an inline status dropdown when there's room. */
+ * additionally shows call/WhatsApp icons and an inline status dropdown when there's room.
+ * Double-clicking an empty slot starts a new visit there; dragging a block onto a new
+ * slot (or, in Week view, a different day's column) reschedules it in place. */
 function DayGridColumn({
   ymd,
   visits,
   isToday,
   onEdit,
   onChangeStatus,
+  onCreateVisit,
+  onReschedule,
   conditionIds,
   elderlyThreshold,
   dayHours,
@@ -484,6 +530,8 @@ function DayGridColumn({
   isToday: boolean
   onEdit: (v: VisitRow) => void
   onChangeStatus?: (id: string, status: VisitStatus) => void
+  onCreateVisit: (ymd: string, minutesFromMidnight: number) => void
+  onReschedule: (visitId: string, targetYmd: string, minutesFromMidnight: number) => void
   conditionIds: Set<string>
   elderlyThreshold: number
   dayHours: DayHours
@@ -494,14 +542,41 @@ function DayGridColumn({
   const openMin = dayHours.closed ? 24 * 60 : parseHHMM(dayHours.open)
   const closeMin = dayHours.closed ? 0 : parseHHMM(dayHours.close)
 
+  function handleBackgroundDoubleClick(e: React.MouseEvent<HTMLDivElement>) {
+    const rect = e.currentTarget.getBoundingClientRect()
+    onCreateVisit(ymd, pxToSnappedMinutes(e.clientY - rect.top))
+  }
+
+  function handleDragOver(e: React.DragEvent<HTMLDivElement>) {
+    e.preventDefault()
+  }
+
+  function handleDrop(e: React.DragEvent<HTMLDivElement>) {
+    e.preventDefault()
+    const visitId = e.dataTransfer.getData('text/plain')
+    if (!visitId) return
+    const rect = e.currentTarget.getBoundingClientRect()
+    onReschedule(visitId, ymd, pxToSnappedMinutes(e.clientY - rect.top))
+  }
+
   return (
-    <div className="relative border-l border-slate-100" style={{ height: HOUR_HEIGHT * 24 }}>
+    <div
+      className="relative border-l border-slate-100"
+      style={{ height: HOUR_HEIGHT * 24 }}
+      onDoubleClick={handleBackgroundDoubleClick}
+      onDragOver={handleDragOver}
+      onDrop={handleDrop}
+    >
       {openMin > 0 && <div className="absolute inset-x-0 top-0 bg-slate-100" style={{ height: (openMin / 60) * HOUR_HEIGHT }} />}
       {closeMin < 24 * 60 && (
         <div className="absolute inset-x-0 bg-slate-100" style={{ top: (closeMin / 60) * HOUR_HEIGHT, height: ((24 * 60 - closeMin) / 60) * HOUR_HEIGHT }} />
       )}
-      {GRID_HOURS.map((h) => (
-        <div key={h} className="absolute inset-x-0 border-t border-slate-100" style={{ top: h * HOUR_HEIGHT, height: HOUR_HEIGHT }} />
+      {GRID_QUARTERS.map((q) => (
+        <div
+          key={q}
+          className={`absolute inset-x-0 border-t ${q % 4 === 0 ? 'border-slate-200' : 'border-slate-100'}`}
+          style={{ top: q * QUARTER_HEIGHT, height: QUARTER_HEIGHT }}
+        />
       ))}
       {isToday && (
         <div className="absolute inset-x-0 z-20 border-t-2 border-red-500" style={{ top: (nowMinutes / 60) * HOUR_HEIGHT }}>
@@ -520,7 +595,13 @@ function DayGridColumn({
         return (
           <div
             key={v.id}
-            className={`absolute overflow-hidden rounded-md border text-white ${visitBlockClass(v.status)}`}
+            draggable
+            onDragStart={(e) => {
+              e.dataTransfer.setData('text/plain', v.id)
+              e.dataTransfer.effectAllowed = 'move'
+            }}
+            onDoubleClick={(e) => e.stopPropagation()}
+            className={`absolute cursor-grab overflow-hidden rounded-md border text-white active:cursor-grabbing ${visitBlockClass(v.status)}`}
             style={{ top, height, left: `calc(${col * widthPct}% + 1px)`, width: `calc(${widthPct}% - 2px)` }}
           >
             <button onClick={() => onEdit(v)} className={`block w-full px-1.5 py-0.5 text-left text-[10px] leading-tight ${showActions ? 'pr-14' : ''}`}>
@@ -586,14 +667,19 @@ function DayGridColumn({
   )
 }
 
-function GridHourLabels() {
+function GridTimeLabels() {
   return (
-    <div className="sticky left-0 z-10 w-12 shrink-0 bg-white sm:w-16">
-      {GRID_HOURS.map((h) => (
-        <div key={h} className="relative border-t border-slate-100" style={{ height: HOUR_HEIGHT }}>
-          <span className="absolute -top-2 right-1 text-[10px] text-slate-400">{hourLabel(h)}</span>
-        </div>
-      ))}
+    <div className="sticky left-0 z-10 w-14 shrink-0 bg-white sm:w-16">
+      {GRID_QUARTERS.map((q) => {
+        const isHour = q % 4 === 0
+        return (
+          <div key={q} className={`relative border-t ${isHour ? 'border-slate-200' : 'border-slate-50'}`} style={{ height: QUARTER_HEIGHT }}>
+            <span className={`absolute -top-[7px] right-1 whitespace-nowrap ${isHour ? 'text-[10px] font-medium text-slate-500' : 'text-[9px] text-slate-400'}`}>
+              {quarterLabel(q)}
+            </span>
+          </div>
+        )
+      })}
     </div>
   )
 }
@@ -605,6 +691,8 @@ function DayGridView({
   today,
   onEdit,
   onChangeStatus,
+  onCreateVisit,
+  onReschedule,
   conditionIds,
   elderlyThreshold,
 }: {
@@ -614,6 +702,8 @@ function DayGridView({
   today: string
   onEdit: (v: VisitRow) => void
   onChangeStatus: (id: string, status: VisitStatus) => void
+  onCreateVisit: (ymd: string, minutesFromMidnight: number) => void
+  onReschedule: (visitId: string, targetYmd: string, minutesFromMidnight: number) => void
   conditionIds: Set<string>
   elderlyThreshold: number
 }) {
@@ -628,9 +718,9 @@ function DayGridView({
 
   return (
     <div className="rounded-xl border border-slate-200 bg-white">
-      {visits.length === 0 && <p className="border-b border-slate-100 p-4 text-sm text-slate-500">No visits scheduled for this day.</p>}
+      {visits.length === 0 && <p className="border-b border-slate-100 p-4 text-sm text-slate-500">No visits scheduled for this day. Double-click a slot to add one.</p>}
       <div ref={scrollRef} className="flex max-h-[70vh] overflow-auto">
-        <GridHourLabels />
+        <GridTimeLabels />
         <div className="flex-1">
           <DayGridColumn
             ymd={ymd}
@@ -638,6 +728,8 @@ function DayGridView({
             isToday={ymd === today}
             onEdit={onEdit}
             onChangeStatus={onChangeStatus}
+            onCreateVisit={onCreateVisit}
+            onReschedule={onReschedule}
             conditionIds={conditionIds}
             elderlyThreshold={elderlyThreshold}
             dayHours={dayHours}
@@ -657,6 +749,8 @@ function WeekView({
   businessHours,
   onSelectDay,
   onEdit,
+  onCreateVisit,
+  onReschedule,
   conditionIds,
   elderlyThreshold,
 }: {
@@ -667,6 +761,8 @@ function WeekView({
   businessHours: BusinessHours
   onSelectDay: (ymd: string) => void
   onEdit: (v: VisitRow) => void
+  onCreateVisit: (ymd: string, minutesFromMidnight: number) => void
+  onReschedule: (visitId: string, targetYmd: string, minutesFromMidnight: number) => void
   conditionIds: Set<string>
   elderlyThreshold: number
 }) {
@@ -682,7 +778,7 @@ function WeekView({
   return (
     <div className="rounded-xl border border-slate-200 bg-white">
       <div className="flex border-b border-slate-200">
-        <div className="w-12 shrink-0 sm:w-16" />
+        <div className="w-14 shrink-0 sm:w-16" />
         {days.map((ymd, i) => {
           const isToday = ymd === today
           const d = fromYmd(ymd)
@@ -701,7 +797,7 @@ function WeekView({
         })}
       </div>
       <div ref={scrollRef} className="flex max-h-[70vh] overflow-auto">
-        <GridHourLabels />
+        <GridTimeLabels />
         {days.map((ymd) => (
           <div key={ymd} className="min-w-[110px] flex-1">
             <DayGridColumn
@@ -709,6 +805,8 @@ function WeekView({
               visits={byDay.get(ymd) ?? []}
               isToday={ymd === today}
               onEdit={onEdit}
+              onCreateVisit={onCreateVisit}
+              onReschedule={onReschedule}
               conditionIds={conditionIds}
               elderlyThreshold={elderlyThreshold}
               dayHours={dayHoursFor(businessHours, ymd)}

@@ -1,10 +1,11 @@
 import { FormEvent, useEffect, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../context/AuthContext'
 import { useSettings } from '../context/SettingsContext'
 import PatientForm from '../components/PatientForm'
 import { Patient, Location, Provider, PatientGroup, providerFullName, patientFullName, formatDobAge } from '../types'
+import { toDatetimeLocal } from '../lib/dates'
 import { syncVisitToGoogle } from '../lib/googleCalendarSync'
 
 // Supabase caps a single request at 1000 rows. The clinic has more patients than
@@ -29,6 +30,10 @@ async function fetchAllRows<T>(buildQuery: () => any): Promise<T[]> {
 
 export default function NewVisit() {
   const navigate = useNavigate()
+  const location = useLocation()
+  // Set when opened via a double-click on a specific slot in the Schedule grid —
+  // prefills the date/time so staff don't have to retype what they just clicked.
+  const prefillScheduledAt = (location.state as { prefillScheduledAt?: string } | null)?.prefillScheduledAt ?? null
   const { locationIds } = useAuth()
   const { settings } = useSettings()
   const [patients, setPatients] = useState<Patient[]>([])
@@ -205,7 +210,13 @@ export default function NewVisit() {
           <form onSubmit={handleScheduleVisit} className="grid gap-3 rounded-xl border border-slate-200 bg-white p-4 sm:grid-cols-2">
             <div>
               <label className="mb-1 block text-sm text-slate-600">Date &amp; time</label>
-              <input name="scheduled_at" type="datetime-local" required className="w-full rounded-lg border border-slate-300 px-3 py-2" />
+              <input
+                name="scheduled_at"
+                type="datetime-local"
+                required
+                defaultValue={prefillScheduledAt ? toDatetimeLocal(prefillScheduledAt) : undefined}
+                className="w-full rounded-lg border border-slate-300 px-3 py-2"
+              />
             </div>
             <div>
               <label className="mb-1 block text-sm text-slate-600">Duration</label>
