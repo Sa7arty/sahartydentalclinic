@@ -696,6 +696,15 @@ alter table public.employees enable row level security;
 create policy "dentist manages employees" on public.employees for all
   using (public.has_role(auth.uid(), 'dentist')) with check (public.has_role(auth.uid(), 'dentist'));
 
+-- Added 2026-09-15 (staff_can_view_own_employee_record): non-dentist staff
+-- could not read their OWN employees row (only the dentist-only policy above
+-- existed), which silently broke the Dashboard attendance clock widget for
+-- everyone but the dentist — and broke the employee_attendance self-service
+-- policies below too, since those check membership in this table via a
+-- subquery that was itself blocked by RLS.
+create policy "staff can view own employee record" on public.employees for select
+  using (user_id = auth.uid());
+
 create table public.employee_attendance (
   id uuid primary key default gen_random_uuid(),
   employee_id uuid not null references public.employees(id) on delete cascade,
