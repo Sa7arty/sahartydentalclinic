@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useState, useCallback, ReactNode } from 'react'
 import { supabase } from '../lib/supabase'
-import { AppSettings, DEFAULT_LETTERHEAD_SETTINGS, mergeLetterheadSettings } from '../types'
+import { AppSettings, DEFAULT_LETTERHEAD_SETTINGS, mergeLetterheadSettings, DEFAULT_BUSINESS_HOURS, mergeBusinessHours } from '../types'
 import { useAuth } from './AuthContext'
 
 interface SettingsContextValue {
@@ -38,6 +38,7 @@ const defaultSettings: AppSettings = {
   clinic_longitude: null,
   attendance_radius_meters: 100,
   letterhead_settings: DEFAULT_LETTERHEAD_SETTINGS,
+  business_hours: DEFAULT_BUSINESS_HOURS,
 }
 
 const SettingsContext = createContext<SettingsContextValue | undefined>(undefined)
@@ -79,6 +80,7 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
         clinic_longitude: data.clinic_longitude ?? null,
         attendance_radius_meters: data.attendance_radius_meters ?? 100,
         letterhead_settings: mergeLetterheadSettings(data.letterhead_settings),
+        business_hours: mergeBusinessHours(data.business_hours),
       })
     }
     setLoading(false)

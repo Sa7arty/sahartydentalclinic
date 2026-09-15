@@ -280,6 +280,39 @@ export interface AppSettings {
   clinic_longitude: number | null
   attendance_radius_meters: number
   letterhead_settings: LetterheadSettings
+  business_hours: BusinessHours
+}
+
+/** One weekday's opening hours — "closed" means the clinic isn't open at all that day. */
+export interface DayHours {
+  closed: boolean
+  open: string
+  close: string
+}
+
+/** Keyed by JS Date.getDay() as a string: "0" = Sunday … "6" = Saturday. Drives the
+ * white (open) vs gray (closed) shading on the Schedule day/week grid. */
+export type BusinessHours = Record<string, DayHours>
+
+export const DEFAULT_DAY_HOURS: DayHours = { closed: false, open: '09:00', close: '21:00' }
+
+export const DEFAULT_BUSINESS_HOURS: BusinessHours = {
+  '0': { ...DEFAULT_DAY_HOURS },
+  '1': { ...DEFAULT_DAY_HOURS },
+  '2': { ...DEFAULT_DAY_HOURS },
+  '3': { ...DEFAULT_DAY_HOURS },
+  '4': { ...DEFAULT_DAY_HOURS },
+  '5': { ...DEFAULT_DAY_HOURS },
+  '6': { ...DEFAULT_DAY_HOURS },
+}
+
+/** Fills in any weekday the DB row doesn't have yet (new clinic, or a day added after rollout). */
+export function mergeBusinessHours(partial: Partial<BusinessHours> | null | undefined): BusinessHours {
+  const merged = { ...DEFAULT_BUSINESS_HOURS }
+  for (const key of Object.keys(merged)) {
+    if (partial?.[key]) merged[key] = { ...DEFAULT_DAY_HOURS, ...partial[key] }
+  }
+  return merged
 }
 
 /** Paper size every exported PDF (letters, prescriptions, receipts, payslips…) is printed on. */

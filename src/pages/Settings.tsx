@@ -16,6 +16,8 @@ import {
   PAINT_TYPE_LABELS,
   LetterheadSettings,
   PaperSize,
+  BusinessHours,
+  DEFAULT_DAY_HOURS,
 } from '../types'
 import { WORLD_COUNTRIES } from '../data/countries'
 import { WEEKDAY_NAMES_FROM } from '../lib/dates'
@@ -70,6 +72,7 @@ export default function Settings() {
   const [weekStartDay, setWeekStartDay] = useState(settings.week_start_day)
   const [defaultDuration, setDefaultDuration] = useState(settings.default_visit_duration_minutes)
   const [visitProviderRequired, setVisitProviderRequired] = useState(settings.visit_provider_required)
+  const [businessHours, setBusinessHours] = useState<BusinessHours>(settings.business_hours)
   const [savingCalendar, setSavingCalendar] = useState(false)
 
   const [groups, setGroups] = useState<PatientGroup[]>([])
@@ -468,7 +471,7 @@ export default function Settings() {
     setSavingCalendar(true)
     const { error } = await supabase
       .from('app_settings')
-      .update({ week_start_day: weekStartDay, default_visit_duration_minutes: defaultDuration, visit_provider_required: visitProviderRequired })
+      .update({ week_start_day: weekStartDay, default_visit_duration_minutes: defaultDuration, visit_provider_required: visitProviderRequired, business_hours: businessHours })
       .eq('id', true)
     setSavingCalendar(false)
     if (error) alert(error.message)
@@ -705,6 +708,48 @@ export default function Settings() {
               Require a provider on every visit
             </label>
             <p className="mt-0.5 text-[11px] text-slate-400">When on, a visit can't be saved without choosing a provider (doctor).</p>
+          </div>
+
+          <div className="border-t border-slate-100 pt-3">
+            <h3 className="mb-1 text-sm font-medium text-navy-900">Opening hours (shifts)</h3>
+            <p className="mb-2 text-[11px] text-slate-400">
+              Shown as white on the Schedule day/week grid — everything outside these hours is shaded gray. Set different hours per day, or mark a day closed.
+            </p>
+            <div className="space-y-1.5">
+              {WEEKDAY_FULL_NAMES.map((name, dow) => {
+                const hours = businessHours[String(dow)] ?? DEFAULT_DAY_HOURS
+                return (
+                  <div key={dow} className="flex flex-wrap items-center gap-3 rounded-lg border border-slate-200 px-3 py-1.5">
+                    <span className="w-24 shrink-0 text-sm text-navy-800">{name}</span>
+                    <label className="flex items-center gap-1.5 text-xs text-slate-500">
+                      <input
+                        type="checkbox"
+                        checked={hours.closed}
+                        onChange={(e) => setBusinessHours((bh) => ({ ...bh, [String(dow)]: { ...hours, closed: e.target.checked } }))}
+                      />
+                      Closed
+                    </label>
+                    {!hours.closed && (
+                      <>
+                        <input
+                          type="time"
+                          value={hours.open}
+                          onChange={(e) => setBusinessHours((bh) => ({ ...bh, [String(dow)]: { ...hours, open: e.target.value } }))}
+                          className="rounded-lg border border-slate-300 px-2 py-1 text-sm"
+                        />
+                        <span className="text-xs text-slate-400">to</span>
+                        <input
+                          type="time"
+                          value={hours.close}
+                          onChange={(e) => setBusinessHours((bh) => ({ ...bh, [String(dow)]: { ...hours, close: e.target.value } }))}
+                          className="rounded-lg border border-slate-300 px-2 py-1 text-sm"
+                        />
+                      </>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
           </div>
 
           <button type="submit" disabled={savingCalendar} className="rounded-lg bg-navy-900 px-4 py-2 text-sm font-medium text-white hover:bg-navy-800 disabled:opacity-50">

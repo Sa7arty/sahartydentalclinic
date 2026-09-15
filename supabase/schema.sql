@@ -1316,3 +1316,16 @@ create policy "dentist deletes clinic assets" on storage.objects for delete
 -- gained a 'custom' option backed by custom_paper_width_mm/custom_paper_height_mm
 -- (both in the same letterhead_settings jsonb blob, defaulting to A4's
 -- 210x297 — mergeLetterheadSettings() fills them in for existing rows).
+
+-- Schedule hour-grid redesign + configurable opening hours (2026-09-15):
+-- Schedule's Day and Week views now render as a real hour-by-hour calendar
+-- grid (visits positioned/sized by actual time, side-by-side on overlap,
+-- colored by status) instead of a plain agenda list — see DayGridColumn in
+-- Schedule.tsx. app_settings.business_hours (jsonb, keyed "0".."6" =
+-- Sun..Sat per JS Date.getDay(), each {closed, open, close}) drives the
+-- white/gray shading on that grid and is edited under Settings > Calendar &
+-- scheduling > "Opening hours (shifts)". See BusinessHours/DayHours/
+-- DEFAULT_BUSINESS_HOURS/mergeBusinessHours in src/types.ts. Independent of
+-- the pre-existing weekly_off_day (still used for payroll) — deliberately
+-- not merged into this, to avoid touching payroll calculations.
+alter table public.app_settings add column if not exists business_hours jsonb not null default '{}'::jsonb;

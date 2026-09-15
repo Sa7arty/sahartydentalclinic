@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import {
   Visit,
@@ -12,10 +12,11 @@ import {
   whatsappHref,
   VisitStatus,
   VISIT_STATUS_LABELS,
-  VISIT_STATUS_COLORS,
-  visitRowClass,
   visitChipClass,
   visitBlockClass,
+  BusinessHours,
+  DayHours,
+  DEFAULT_DAY_HOURS,
 } from '../types'
 import { useAuth } from '../context/AuthContext'
 import { useSettings } from '../context/SettingsContext'
@@ -43,8 +44,6 @@ function addMinutes(iso: string, minutes: number) {
 
 const HOUR_HEIGHT = 56 // px per hour row
 const GRID_HOURS = Array.from({ length: 24 }, (_, i) => i)
-const BUSINESS_START_HOUR = 7
-const BUSINESS_END_HOUR = 21
 
 function hourLabel(hour: number) {
   const h12 = hour % 12 === 0 ? 12 : hour % 12
@@ -54,6 +53,26 @@ function hourLabel(hour: number) {
 function minutesFromMidnight(iso: string) {
   const d = new Date(iso)
   return d.getHours() * 60 + d.getMinutes()
+}
+
+/** "HH:MM" -> minutes since midnight. */
+function parseHHMM(hhmm: string) {
+  const [h, m] = hhmm.split(':').map(Number)
+  return (h || 0) * 60 + (m || 0)
+}
+
+function dayHoursFor(businessHours: BusinessHours, ymd: string): DayHours {
+  return businessHours[String(fromYmd(ymd).getDay())] ?? DEFAULT_DAY_HOURS
+}
+
+/** Earliest opening time across a set of days, for a sensible default scroll position. */
+function earliestOpenMinutes(days: string[], businessHours: BusinessHours) {
+  let min = 24 * 60
+  for (const ymd of days) {
+    const h = dayHoursFor(businessHours, ymd)
+    if (!h.closed) min = Math.min(min, parseHHMM(h.open))
+  }
+  return min === 24 * 60 ? 8 * 60 : min
 }
 
 /** Greedy interval-graph column assignment so overlapping visits render side-by-side instead of stacking. */
@@ -142,26 +161,9 @@ export default function Schedule() {
     setLoading(false)
   }
 
-  async function handleChangeDuration(visitId: string, minutes: number) {
-    setVisits((cur) => cur.map((v) => (v.id === visitId ? { ...v, duration_minutes: minutes } : v)))
-    const { error } = await supabase.from('visits').update({ duration_minutes: minutes }).eq('id', visitId)
-    if (error) alert(error.message)
-    else syncVisitToGoogle(visitId)
-  }
-
   async function handleChangeStatus(visitId: string, status: VisitStatus) {
     setVisits((cur) => cur.map((v) => (v.id === visitId ? { ...v, status } : v)))
     const { error } = await supabase.from('visits').update({ status }).eq('id', visitId)
-    if (error) alert(error.message)
-    else syncVisitToGoogle(visitId)
-  }
-
-  async function handleChangeProvider(visitId: string, providerId: string) {
-    setVisits((cur) => cur.map((v) => (v.id === visitId ? { ...v, provider_id: providerId || null } : v)))
-    // Clear the synced event id when the provider changes — a synced event lives
-    // on the OLD provider's Google Calendar, so it can't just be patched onto the
-    // new provider; clearing it makes the next sync create a fresh event there.
-    const { error } = await supabase.from('visits').update({ provider_id: providerId || null, google_event_id: null }).eq('id', visitId)
     if (error) alert(error.message)
     else syncVisitToGoogle(visitId)
   }
@@ -302,18 +304,28 @@ export default function Schedule() {
       {loading ? (
         <p className="text-slate-500">Loading…</p>
       ) : view === 'day' ? (
-        <DayAgenda
+        <DayGridView
+          ymd={anchor}
           visits={byDay.get(anchor) ?? []}
-          providers={providers}
-          onChangeDuration={handleChangeDuration}
-          onChangeStatus={handleChangeStatus}
-          onChangeProvider={handleChangeProvider}
+          businessHours={settings.business_hours}
+          today={today}
           onEdit={setEditingVisit}
+          onChangeStatus={handleChangeStatus}
           conditionIds={conditionIds}
           elderlyThreshold={settings.elderly_age_threshold}
         />
       ) : view === 'week' ? (
-        <WeekView rangeStart={rangeStart} byDay={byDay} today={today} weekdayNames={weekdayNames} onSelectDay={jumpToDay} onEdit={setEditingVisit} conditionIds={conditionIds} elderlyThreshold={settings.elderly_age_threshold} />
+        <WeekView
+          rangeStart={rangeStart}
+          byDay={byDay}
+          today={today}
+          weekdayNames={weekdayNames}
+          businessHours={settings.business_hours}
+          onSelectDay={jumpToDay}
+          onEdit={setEditingVisit}
+          conditionIds={conditionIds}
+          elderlyThreshold={settings.elderly_age_threshold}
+        />
       ) : (
         <MonthGrid anchor={anchor} byDay={byDay} today={today} weekStartDay={weekStartDay} weekdayNames={weekdayNames} onSelectDay={jumpToDay} onEdit={setEditingVisit} conditionIds={conditionIds} elderlyThreshold={settings.elderly_age_threshold} />
       )}
@@ -453,97 +465,186 @@ function VisitTimeRange({ v }: { v: VisitRow }) {
   )
 }
 
-function DayAgenda({
+/** One day's column of positioned appointment blocks, shared by the Day and Week grids.
+ * `compact` (week) keeps blocks narrow with click-to-edit only; the full-width day view
+ * additionally shows call/WhatsApp icons and an inline status dropdown when there's room. */
+function DayGridColumn({
+  ymd,
   visits,
-  providers,
-  onChangeDuration,
-  onChangeStatus,
-  onChangeProvider,
+  isToday,
   onEdit,
+  onChangeStatus,
+  conditionIds,
+  elderlyThreshold,
+  dayHours,
+  compact,
+}: {
+  ymd: string
+  visits: VisitRow[]
+  isToday: boolean
+  onEdit: (v: VisitRow) => void
+  onChangeStatus?: (id: string, status: VisitStatus) => void
+  conditionIds: Set<string>
+  elderlyThreshold: number
+  dayHours: DayHours
+  compact: boolean
+}) {
+  const layout = useMemo(() => layoutDayOverlaps(visits), [visits])
+  const nowMinutes = new Date().getHours() * 60 + new Date().getMinutes()
+  const openMin = dayHours.closed ? 24 * 60 : parseHHMM(dayHours.open)
+  const closeMin = dayHours.closed ? 0 : parseHHMM(dayHours.close)
+
+  return (
+    <div className="relative border-l border-slate-100" style={{ height: HOUR_HEIGHT * 24 }}>
+      {openMin > 0 && <div className="absolute inset-x-0 top-0 bg-slate-100" style={{ height: (openMin / 60) * HOUR_HEIGHT }} />}
+      {closeMin < 24 * 60 && (
+        <div className="absolute inset-x-0 bg-slate-100" style={{ top: (closeMin / 60) * HOUR_HEIGHT, height: ((24 * 60 - closeMin) / 60) * HOUR_HEIGHT }} />
+      )}
+      {GRID_HOURS.map((h) => (
+        <div key={h} className="absolute inset-x-0 border-t border-slate-100" style={{ top: h * HOUR_HEIGHT, height: HOUR_HEIGHT }} />
+      ))}
+      {isToday && (
+        <div className="absolute inset-x-0 z-20 border-t-2 border-red-500" style={{ top: (nowMinutes / 60) * HOUR_HEIGHT }}>
+          <div className="absolute -left-1 -top-[5px] h-2 w-2 rounded-full bg-red-500" />
+        </div>
+      )}
+      {visits.map((v) => {
+        const { col, cols } = layout.get(v.id) ?? { col: 0, cols: 1 }
+        const start = minutesFromMidnight(v.scheduled_at)
+        const top = (start / 60) * HOUR_HEIGHT
+        const height = Math.max((v.duration_minutes / 60) * HOUR_HEIGHT, 18)
+        const widthPct = 100 / cols
+        const tel = !compact ? telHref(v.patient?.phone ?? null) : null
+        const wa = !compact ? whatsappHref(v.patient?.phone ?? null) : null
+        const showActions = !compact && (tel || wa)
+        return (
+          <div
+            key={v.id}
+            className={`absolute overflow-hidden rounded-md border text-white ${visitBlockClass(v.status)}`}
+            style={{ top, height, left: `calc(${col * widthPct}% + 1px)`, width: `calc(${widthPct}% - 2px)` }}
+          >
+            <button onClick={() => onEdit(v)} className={`block w-full px-1.5 py-0.5 text-left text-[10px] leading-tight ${showActions ? 'pr-14' : ''}`}>
+              <p className="flex items-center gap-0.5 truncate font-semibold">
+                {v.patient ? patientFullName(v.patient) : 'Unknown'}
+                {height >= 56 && v.patient && (
+                  <PatientBadges patient={v.patient} elderlyAgeThreshold={elderlyThreshold} hasCondition={conditionIds.has(v.patient.id)} size="xs" />
+                )}
+              </p>
+              {height >= 28 && (
+                <p className="truncate opacity-90">
+                  <VisitTimeRange v={v} />
+                </p>
+              )}
+              {height >= 42 && v.provider && <p className="truncate opacity-90">{providerFullName(v.provider)}</p>}
+              {height >= 56 && v.patient?.phone && <p className="truncate opacity-90">{v.patient.phone}</p>}
+              {height >= 42 && (compact || !onChangeStatus) && <p className="truncate opacity-90">{VISIT_STATUS_LABELS[v.status]}</p>}
+            </button>
+            {showActions && (
+              <div className="absolute right-1 top-0.5 flex gap-1">
+                {tel && (
+                  <a
+                    href={tel}
+                    title="Call"
+                    onClick={(e) => e.stopPropagation()}
+                    className="rounded bg-white/25 px-1 text-[11px] leading-4 hover:bg-white/40"
+                  >
+                    📞
+                  </a>
+                )}
+                {wa && (
+                  <a
+                    href={wa}
+                    target="_blank"
+                    rel="noreferrer"
+                    title="WhatsApp"
+                    onClick={(e) => e.stopPropagation()}
+                    className="rounded bg-white/25 px-1 text-[11px] leading-4 hover:bg-white/40"
+                  >
+                    💬
+                  </a>
+                )}
+              </div>
+            )}
+            {!compact && onChangeStatus && height >= 42 && (
+              <select
+                value={v.status}
+                onChange={(e) => onChangeStatus(v.id, e.target.value as VisitStatus)}
+                onClick={(e) => e.stopPropagation()}
+                className="absolute bottom-0.5 left-1.5 right-1.5 rounded border-0 bg-white/20 px-1 py-0 text-[10px] text-white hover:bg-white/30"
+              >
+                {(Object.keys(VISIT_STATUS_LABELS) as VisitStatus[]).map((s) => (
+                  <option key={s} value={s} className="text-navy-900">
+                    {VISIT_STATUS_LABELS[s]}
+                  </option>
+                ))}
+              </select>
+            )}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+function GridHourLabels() {
+  return (
+    <div className="sticky left-0 z-10 w-12 shrink-0 bg-white sm:w-16">
+      {GRID_HOURS.map((h) => (
+        <div key={h} className="relative border-t border-slate-100" style={{ height: HOUR_HEIGHT }}>
+          <span className="absolute -top-2 right-1 text-[10px] text-slate-400">{hourLabel(h)}</span>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function DayGridView({
+  ymd,
+  visits,
+  businessHours,
+  today,
+  onEdit,
+  onChangeStatus,
   conditionIds,
   elderlyThreshold,
 }: {
+  ymd: string
   visits: VisitRow[]
-  providers: Provider[]
-  onChangeDuration: (id: string, minutes: number) => void
-  onChangeStatus: (id: string, status: VisitStatus) => void
-  onChangeProvider: (id: string, providerId: string) => void
+  businessHours: BusinessHours
+  today: string
   onEdit: (v: VisitRow) => void
+  onChangeStatus: (id: string, status: VisitStatus) => void
   conditionIds: Set<string>
   elderlyThreshold: number
 }) {
-  const sorted = [...visits].sort((a, b) => a.scheduled_at.localeCompare(b.scheduled_at))
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const dayHours = dayHoursFor(businessHours, ymd)
+
+  useEffect(() => {
+    const scrollToMin = dayHours.closed ? 8 * 60 : Math.max(0, parseHHMM(dayHours.open) - 60)
+    scrollRef.current?.scrollTo({ top: (scrollToMin / 60) * HOUR_HEIGHT })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ymd])
+
   return (
-    <div className="max-h-[65vh] overflow-y-auto rounded-xl border border-slate-200 bg-white">
-      {sorted.length === 0 && <p className="p-4 text-sm text-slate-500">No visits scheduled for this day.</p>}
-      {sorted.map((v) => {
-        const tel = telHref(v.patient?.phone ?? null)
-        const wa = whatsappHref(v.patient?.phone ?? null)
-        return (
-        <div key={v.id} className={`flex items-center gap-4 border-b border-slate-100 px-4 py-3 last:border-0 ${visitRowClass(v.status)}`}>
-          <div className="w-28 shrink-0 text-sm font-medium text-navy-700">
-            <VisitTimeRange v={v} />
-          </div>
-          <Link to={`/patients/${v.patient?.id}`} className="flex-1">
-            <p className="flex flex-wrap items-center gap-1.5 font-medium text-navy-900">
-              {v.patient ? patientFullName(v.patient) : 'Unknown patient'}
-              {v.patient && <PatientBadges patient={v.patient} elderlyAgeThreshold={elderlyThreshold} hasCondition={conditionIds.has(v.patient.id)} />}
-            </p>
-            {v.notes && <p className="truncate text-xs text-slate-400">{v.notes}</p>}
-          </Link>
-          {tel && (
-            <a href={tel} title="Call" className="shrink-0 rounded-md border border-slate-200 px-2 py-1 text-xs text-navy-700 hover:bg-slate-100">
-              Call
-            </a>
-          )}
-          {wa && (
-            <a href={wa} target="_blank" rel="noreferrer" title="WhatsApp" className="shrink-0 rounded-md border border-slate-200 px-2 py-1 text-xs text-navy-700 hover:bg-slate-100">
-              WhatsApp
-            </a>
-          )}
-          <button onClick={() => onEdit(v)} className="shrink-0 rounded-md border border-slate-200 px-2 py-1 text-xs text-navy-700 hover:bg-slate-100">
-            Edit
-          </button>
-          <select
-            value={v.provider_id ?? NO_PROVIDER}
-            onChange={(e) => onChangeProvider(v.id, e.target.value)}
-            onClick={(e) => e.stopPropagation()}
-            title="Provider for this appointment"
-            className="hidden rounded-lg border border-slate-300 px-2 py-1 text-xs text-slate-600 sm:block"
-          >
-            <option value={NO_PROVIDER}>No provider</option>
-            {providers.map((pr) => (
-              <option key={pr.id} value={pr.id}>
-                {providerFullName(pr)}
-              </option>
-            ))}
-          </select>
-          <select
-            value={v.duration_minutes}
-            onChange={(e) => onChangeDuration(v.id, Number(e.target.value))}
-            onClick={(e) => e.stopPropagation()}
-            className="rounded-lg border border-slate-300 px-2 py-1 text-xs text-slate-600"
-          >
-            {DURATION_OPTIONS.map((n) => (
-              <option key={n} value={n}>
-                {n} min
-              </option>
-            ))}
-          </select>
-          <select
-            value={v.status}
-            onChange={(e) => onChangeStatus(v.id, e.target.value as VisitStatus)}
-            className={`shrink-0 rounded-full border-0 px-2 py-1 text-xs font-medium ${VISIT_STATUS_COLORS[v.status]}`}
-          >
-            {(Object.keys(VISIT_STATUS_LABELS) as VisitStatus[]).map((s) => (
-              <option key={s} value={s}>
-                {VISIT_STATUS_LABELS[s]}
-              </option>
-            ))}
-          </select>
+    <div className="rounded-xl border border-slate-200 bg-white">
+      {visits.length === 0 && <p className="border-b border-slate-100 p-4 text-sm text-slate-500">No visits scheduled for this day.</p>}
+      <div ref={scrollRef} className="flex max-h-[70vh] overflow-auto">
+        <GridHourLabels />
+        <div className="flex-1">
+          <DayGridColumn
+            ymd={ymd}
+            visits={visits}
+            isToday={ymd === today}
+            onEdit={onEdit}
+            onChangeStatus={onChangeStatus}
+            conditionIds={conditionIds}
+            elderlyThreshold={elderlyThreshold}
+            dayHours={dayHours}
+            compact={false}
+          />
         </div>
-        )
-      })}
+      </div>
     </div>
   )
 }
@@ -553,6 +654,7 @@ function WeekView({
   byDay,
   today,
   weekdayNames,
+  businessHours,
   onSelectDay,
   onEdit,
   conditionIds,
@@ -562,6 +664,7 @@ function WeekView({
   byDay: Map<string, VisitRow[]>
   today: string
   weekdayNames: string[]
+  businessHours: BusinessHours
   onSelectDay: (ymd: string) => void
   onEdit: (v: VisitRow) => void
   conditionIds: Set<string>
@@ -569,10 +672,11 @@ function WeekView({
 }) {
   const days = Array.from({ length: 7 }, (_, i) => addDays(rangeStart, i))
   const scrollRef = useRef<HTMLDivElement>(null)
-  const nowMinutes = new Date().getHours() * 60 + new Date().getMinutes()
 
   useEffect(() => {
-    scrollRef.current?.scrollTo({ top: Math.max(0, (BUSINESS_START_HOUR - 1) * HOUR_HEIGHT) })
+    const scrollToMin = earliestOpenMinutes(days, businessHours)
+    scrollRef.current?.scrollTo({ top: Math.max(0, (scrollToMin / 60 - 1) * HOUR_HEIGHT) })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rangeStart])
 
   return (
@@ -597,64 +701,21 @@ function WeekView({
         })}
       </div>
       <div ref={scrollRef} className="flex max-h-[70vh] overflow-auto">
-        <div className="sticky left-0 z-10 w-12 shrink-0 bg-white sm:w-16">
-          {GRID_HOURS.map((h) => (
-            <div key={h} className="relative border-t border-slate-100" style={{ height: HOUR_HEIGHT }}>
-              <span className="absolute -top-2 right-1 text-[10px] text-slate-400">{hourLabel(h)}</span>
-            </div>
-          ))}
-        </div>
-        {days.map((ymd) => {
-          const list = byDay.get(ymd) ?? []
-          const layout = layoutDayOverlaps(list)
-          const isToday = ymd === today
-          return (
-            <div key={ymd} className="relative min-w-[110px] flex-1 border-l border-slate-100" style={{ height: HOUR_HEIGHT * 24 }}>
-              {GRID_HOURS.map((h) => (
-                <div
-                  key={h}
-                  className={`absolute inset-x-0 border-t border-slate-100 ${h < BUSINESS_START_HOUR || h >= BUSINESS_END_HOUR ? 'bg-slate-50' : ''}`}
-                  style={{ top: h * HOUR_HEIGHT, height: HOUR_HEIGHT }}
-                />
-              ))}
-              {isToday && (
-                <div className="absolute inset-x-0 z-20 border-t-2 border-red-500" style={{ top: (nowMinutes / 60) * HOUR_HEIGHT }}>
-                  <div className="absolute -left-1 -top-[5px] h-2 w-2 rounded-full bg-red-500" />
-                </div>
-              )}
-              {list.map((v) => {
-                const { col, cols } = layout.get(v.id) ?? { col: 0, cols: 1 }
-                const start = minutesFromMidnight(v.scheduled_at)
-                const top = (start / 60) * HOUR_HEIGHT
-                const height = Math.max((v.duration_minutes / 60) * HOUR_HEIGHT, 18)
-                const widthPct = 100 / cols
-                return (
-                  <button
-                    key={v.id}
-                    onClick={() => onEdit(v)}
-                    className={`absolute overflow-hidden rounded-md border px-1.5 py-0.5 text-left text-[10px] leading-tight text-white ${visitBlockClass(v.status)}`}
-                    style={{ top, height, left: `calc(${col * widthPct}% + 1px)`, width: `calc(${widthPct}% - 2px)` }}
-                  >
-                    <p className="flex items-center gap-0.5 truncate font-semibold">
-                      {v.patient ? patientFullName(v.patient) : 'Unknown'}
-                      {height >= 56 && v.patient && (
-                        <PatientBadges patient={v.patient} elderlyAgeThreshold={elderlyThreshold} hasCondition={conditionIds.has(v.patient.id)} size="xs" />
-                      )}
-                    </p>
-                    {height >= 28 && (
-                      <p className="truncate opacity-90">
-                        <VisitTimeRange v={v} />
-                      </p>
-                    )}
-                    {height >= 42 && v.provider && <p className="truncate opacity-90">{providerFullName(v.provider)}</p>}
-                    {height >= 56 && v.patient?.phone && <p className="truncate opacity-90">{v.patient.phone}</p>}
-                    {height >= 42 && <p className="truncate opacity-90">{VISIT_STATUS_LABELS[v.status]}</p>}
-                  </button>
-                )
-              })}
-            </div>
-          )
-        })}
+        <GridHourLabels />
+        {days.map((ymd) => (
+          <div key={ymd} className="min-w-[110px] flex-1">
+            <DayGridColumn
+              ymd={ymd}
+              visits={byDay.get(ymd) ?? []}
+              isToday={ymd === today}
+              onEdit={onEdit}
+              conditionIds={conditionIds}
+              elderlyThreshold={elderlyThreshold}
+              dayHours={dayHoursFor(businessHours, ymd)}
+              compact={true}
+            />
+          </div>
+        ))}
       </div>
     </div>
   )
