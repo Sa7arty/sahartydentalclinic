@@ -1308,3 +1308,11 @@ create policy "dentist deletes clinic assets" on storage.objects for delete
 -- just Letters), and the table-header row now repeats on every page for
 -- ledger statements / order summaries / outstanding balances (previously
 -- only staff summary and the huddle sheet did this correctly).
+
+-- Footer redesign + custom paper size (2026-09-15): the footer is now a
+-- fixed 5-row layout (Tel/Email, blank, Address, blank, Website) instead of
+-- 2 combined lines — see computeFooterLines in pdf.ts, still width-aware
+-- (the Tel/Email row itself wraps onto two rows if it doesn't fit). paper_size
+-- gained a 'custom' option backed by custom_paper_width_mm/custom_paper_height_mm
+-- (both in the same letterhead_settings jsonb blob, defaulting to A4's
+-- 210x297 — mergeLetterheadSettings() fills them in for existing rows).

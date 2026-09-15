@@ -49,6 +49,12 @@ export function invalidateLetterheadCache() {
   logoDataUrlCache.clear()
 }
 
+/** Creates a new document at the owner's configured paper size (A4/A5/A6, or a custom width × height in mm). */
+function newLetterheadDoc(lh: LetterheadSettings): jsPDF {
+  const format = lh.paper_size === 'custom' ? [lh.custom_paper_width_mm, lh.custom_paper_height_mm] : lh.paper_size
+  return new jsPDF({ unit: 'mm', format })
+}
+
 function fetchAsDataUrl(url: string): Promise<string | null> {
   if (!logoDataUrlCache.has(url)) {
     logoDataUrlCache.set(
@@ -106,26 +112,24 @@ async function drawLetterheadHeader(doc: jsPDF, subtitle: string, lh: Letterhead
 }
 
 /**
- * Splits the footer's two info lines further if the configured text size (or
- * a long phone/address) would otherwise overflow the page width — e.g. a
- * large footer_text_size_pt with the full address+website combined can run
- * off both edges. Recomputed per page since paper size affects the width.
+ * The footer is a fixed 5-row layout: Tel/Email, a blank row, Address, a
+ * blank row, Website — each row lh.footer_line_gap_mm tall. The Tel/Email
+ * row auto-wraps if it's too wide for the page (a large footer_text_size_pt
+ * with long numbers can otherwise run off both edges); Address and Website
+ * each already have a row to themselves so they don't need that fallback.
+ * Recomputed per page since paper size affects the available width.
  */
 function computeFooterLines(doc: jsPDF, lh: LetterheadSettings): string[] {
   const maxWidth = doc.internal.pageSize.getWidth() - 28
   doc.setFont('helvetica', 'normal')
   doc.setFontSize(lh.footer_text_size_pt)
   const contactLine = `Tel: ${lh.clinic_phone}    Email: ${lh.clinic_email}`
-  const addressLine = `Address: ${lh.clinic_address}    Website: ${lh.clinic_website}`
-  const lines: string[] = []
-  if (doc.getTextWidth(contactLine) > maxWidth) lines.push(`Tel: ${lh.clinic_phone}`, `Email: ${lh.clinic_email}`)
-  else lines.push(contactLine)
-  if (doc.getTextWidth(addressLine) > maxWidth) lines.push(`Address: ${lh.clinic_address}`, `Website: ${lh.clinic_website}`)
-  else lines.push(addressLine)
-  return lines
+  const contactRows =
+    doc.getTextWidth(contactLine) > maxWidth ? [`Tel: ${lh.clinic_phone}`, `Email: ${lh.clinic_email}`] : [contactLine]
+  return [...contactRows, '', `Address: ${lh.clinic_address}`, '', `Website: ${lh.clinic_website}`]
 }
 
-/** mm reserved at the bottom of the page for the footer (divider + lines + safety margin). */
+/** mm reserved at the bottom of the page for the footer (divider + rows + safety margin). */
 function footerReserveMm(doc: jsPDF, lh: LetterheadSettings) {
   return 8 + lh.footer_line_gap_mm * computeFooterLines(doc, lh).length
 }
@@ -141,7 +145,7 @@ function drawLetterheadFooter(doc: jsPDF, lh: LetterheadSettings) {
   doc.line(14, dividerY, pageWidth - 14, dividerY)
   doc.setTextColor(...GRAY)
   lines.forEach((line, i) => {
-    doc.text(line, pageWidth / 2, dividerY + lh.footer_line_gap_mm * (i + 1), { align: 'center' })
+    if (line) doc.text(line, pageWidth / 2, dividerY + lh.footer_line_gap_mm * (i + 1), { align: 'center' })
   })
   doc.setTextColor(0, 0, 0)
 }
@@ -168,7 +172,7 @@ export async function exportPaymentReceiptPdf(
   currency: string,
 ) {
   const lh = await getLetterheadSettings()
-  const doc = new jsPDF({ unit: 'mm', format: lh.paper_size })
+  const doc = newLetterheadDoc(lh)
   const right = doc.internal.pageSize.getWidth() - 14
   const receiptNo = new Date(entry.occurred_at).getTime().toString().slice(-8)
   let y = await drawLetterheadHeader(doc, 'Payment Receipt', lh)
@@ -209,7 +213,7 @@ export async function exportPaymentReceiptPdf(
 
 export async function exportPrescriptionPdf(patient: Patient, prescriberName: string, items: PrescriptionItem[], notes: string, dateLabel: string) {
   const lh = await getLetterheadSettings()
-  const doc = new jsPDF({ unit: 'mm', format: lh.paper_size })
+  const doc = newLetterheadDoc(lh)
   const right = doc.internal.pageSize.getWidth() - 14
   const wrapWidth = right - 28
   let y = await drawLetterheadHeader(doc, 'Prescription (Rx)', lh)
@@ -274,7 +278,7 @@ export async function exportLetterPdf(
   authorName: string,
 ) {
   const lh = await getLetterheadSettings()
-  const doc = new jsPDF({ unit: 'mm', format: lh.paper_size })
+  const doc = newLetterheadDoc(lh)
   const right = doc.internal.pageSize.getWidth() - 14
   const wrapWidth = right - 14
   let y = await drawLetterheadHeader(doc, title, lh)
@@ -325,7 +329,7 @@ export async function exportLetterPdf(
 
 export async function exportLedgerStatementPdf(patient: Patient, entries: LedgerEntry[]) {
   const lh = await getLetterheadSettings()
-  const doc = new jsPDF({ unit: 'mm', format: lh.paper_size })
+  const doc = newLetterheadDoc(lh)
   const right = doc.internal.pageSize.getWidth() - 14
   const balance = entries.reduce((sum, l) => sum + (l.entry_type === 'charge' ? Number(l.amount) : -Number(l.amount)), 0)
   let y = await drawLetterheadHeader(doc, 'Patient Statement', lh)
@@ -401,7 +405,7 @@ export interface PayslipPdfData {
 
 export async function exportPayslipPdf(d: PayslipPdfData) {
   const lh = await getLetterheadSettings()
-  const doc = new jsPDF({ unit: 'mm', format: lh.paper_size })
+  const doc = newLetterheadDoc(lh)
   const right = doc.internal.pageSize.getWidth() - 14
   const money = (n: number) => `${d.currency} ${n.toFixed(2)}`
   let y = await drawLetterheadHeader(doc, 'Payslip', lh)
@@ -455,7 +459,7 @@ export async function exportPayslipPdf(d: PayslipPdfData) {
 
 export async function exportOrderSummaryPdf(title: string, monthLabel: string, lines: { name: string; brand: string; qty: number }[]) {
   const lh = await getLetterheadSettings()
-  const doc = new jsPDF({ unit: 'mm', format: lh.paper_size })
+  const doc = newLetterheadDoc(lh)
   const right = doc.internal.pageSize.getWidth() - 14
   let y = await drawLetterheadHeader(doc, `Order Summary — ${title} — ${monthLabel}`, lh)
   y += 8
@@ -499,7 +503,7 @@ export async function exportOutstandingBalancesPdf(
   rows: { name: string; phone: string | null; lastActivity: string | null; balance: number }[],
 ) {
   const lh = await getLetterheadSettings()
-  const doc = new jsPDF({ unit: 'mm', format: lh.paper_size })
+  const doc = newLetterheadDoc(lh)
   const right = doc.internal.pageSize.getWidth() - 14
   const total = rows.reduce((s, r) => s + r.balance, 0)
   let y = await drawLetterheadHeader(doc, 'Outstanding Balances', lh)
@@ -558,7 +562,7 @@ export async function exportStaffSummaryPdf(
   rows: { name: string; present: number; hours: number; overtime: number; late: number; paidLeave: number; absent: number; netPay: number }[],
 ) {
   const lh = await getLetterheadSettings()
-  const doc = new jsPDF({ unit: 'mm', format: lh.paper_size })
+  const doc = newLetterheadDoc(lh)
   const right = doc.internal.pageSize.getWidth() - 14
   let y = await drawLetterheadHeader(doc, `Staff Summary — ${monthLabel}`, lh)
   y += 6
@@ -628,7 +632,7 @@ export interface HuddleSheetRow {
 
 export async function exportDailyHuddleSheetPdf(dateLabel: string, currency: string, rows: HuddleSheetRow[]) {
   const lh = await getLetterheadSettings()
-  const doc = new jsPDF({ unit: 'mm', format: lh.paper_size })
+  const doc = newLetterheadDoc(lh)
   const right = doc.internal.pageSize.getWidth() - 14
   let y = await drawLetterheadHeader(doc, `Daily Huddle Sheet — ${dateLabel}`, lh)
   doc.setFontSize(lh.meta_info_size_pt - 1)
@@ -683,7 +687,7 @@ export async function exportDailyHuddleSheetPdf(dateLabel: string, currency: str
 
 export async function exportDaySchedulePdf(dateLabel: string, visits: { time: string; patientName: string; status: string }[]) {
   const lh = await getLetterheadSettings()
-  const doc = new jsPDF({ unit: 'mm', format: lh.paper_size })
+  const doc = newLetterheadDoc(lh)
   let y = await drawLetterheadHeader(doc, `Schedule — ${dateLabel}`, lh)
   y += 8
 

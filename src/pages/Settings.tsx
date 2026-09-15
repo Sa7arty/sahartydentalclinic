@@ -43,6 +43,7 @@ const PAPER_SIZE_OPTIONS: { value: PaperSize; label: string }[] = [
   { value: 'a4', label: 'A4 (210 × 297 mm) — standard' },
   { value: 'a5', label: 'A5 (148 × 210 mm) — half sheet' },
   { value: 'a6', label: 'A6 (105 × 148 mm) — small note / pad' },
+  { value: 'custom', label: 'Custom size…' },
 ]
 
 const DIAGNOSIS_SCOPE_OPTIONS: ChartScope[] = Object.keys(CHART_SCOPE_LABELS) as ChartScope[]
@@ -1244,18 +1245,18 @@ export default function Settings() {
                   onChange={(e) => setLetterhead((l) => ({ ...l, footer_line_gap_mm: Number(e.target.value) }))}
                   className="w-full rounded-lg border border-slate-300 px-3 py-2"
                 />
-                <p className="mt-0.5 text-[11px] text-slate-400">Space between the phone/email line and the address/website line.</p>
+                <p className="mt-0.5 text-[11px] text-slate-400">Height of each footer row — including the blank rows between Tel/Email, Address, and Website.</p>
               </div>
             </div>
             <div className="rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-500">
-              <p>Preview:</p>
+              <p>Preview (5 rows: Tel/Email, blank, Address, blank, Website):</p>
               <p>
                 Tel: {letterhead.clinic_phone}&nbsp;&nbsp;&nbsp;Email: {letterhead.clinic_email}
               </p>
               <div style={{ height: `${letterhead.footer_line_gap_mm * 2}px` }} />
-              <p>
-                Address: {letterhead.clinic_address}&nbsp;&nbsp;&nbsp;Website: {letterhead.clinic_website}
-              </p>
+              <p>Address: {letterhead.clinic_address}</p>
+              <div style={{ height: `${letterhead.footer_line_gap_mm * 2}px` }} />
+              <p>Website: {letterhead.clinic_website}</p>
             </div>
           </div>
 
@@ -1329,6 +1330,32 @@ export default function Settings() {
                 </option>
               ))}
             </select>
+            {letterhead.paper_size === 'custom' && (
+              <div className="grid gap-4 sm:grid-cols-2 sm:max-w-sm">
+                <div>
+                  <label className="mb-1 block text-sm text-slate-500">Width (mm)</label>
+                  <input
+                    type="number"
+                    min={50}
+                    max={600}
+                    value={letterhead.custom_paper_width_mm}
+                    onChange={(e) => setLetterhead((l) => ({ ...l, custom_paper_width_mm: Number(e.target.value) }))}
+                    className="w-full rounded-lg border border-slate-300 px-3 py-2"
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block text-sm text-slate-500">Height (mm)</label>
+                  <input
+                    type="number"
+                    min={50}
+                    max={600}
+                    value={letterhead.custom_paper_height_mm}
+                    onChange={(e) => setLetterhead((l) => ({ ...l, custom_paper_height_mm: Number(e.target.value) }))}
+                    className="w-full rounded-lg border border-slate-300 px-3 py-2"
+                  />
+                </div>
+              </div>
+            )}
           </div>
 
           <button

@@ -283,7 +283,7 @@ export interface AppSettings {
 }
 
 /** Paper size every exported PDF (letters, prescriptions, receipts, payslips…) is printed on. */
-export type PaperSize = 'a4' | 'a5' | 'a6'
+export type PaperSize = 'a4' | 'a5' | 'a6' | 'custom'
 
 /** Full visual customization of the clinic's shared PDF letterhead — see src/lib/pdf.ts. */
 export interface LetterheadSettings {
@@ -299,9 +299,12 @@ export interface LetterheadSettings {
   /** The "Patient: … / File #… / Date: …"-style line every export prints under the header. */
   meta_info_size_pt: number
   footer_text_size_pt: number
-  /** Vertical gap (mm) between the two footer lines. */
+  /** Vertical gap (mm) between each footer row (including the blank spacer rows). */
   footer_line_gap_mm: number
   paper_size: PaperSize
+  /** Only used when paper_size is 'custom'. */
+  custom_paper_width_mm: number
+  custom_paper_height_mm: number
   /** The word(s) that open the signature block, e.g. "Sincerely,". */
   closing_phrase: string
   /** The line printed under the signer's name, e.g. "Saharty Dental Clinic". */
@@ -324,6 +327,8 @@ export const DEFAULT_LETTERHEAD_SETTINGS: LetterheadSettings = {
   footer_text_size_pt: 8,
   footer_line_gap_mm: 8,
   paper_size: 'a4',
+  custom_paper_width_mm: 210,
+  custom_paper_height_mm: 297,
   closing_phrase: 'Sincerely,',
   signature_title_line: 'Saharty Dental Clinic',
   signature_title_size_pt: 9,
