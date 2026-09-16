@@ -172,6 +172,23 @@ function EmployeesTab({
   const [showAddProvider, setShowAddProvider] = useState(false)
   const [editingProviderId, setEditingProviderId] = useState<string | null>(null)
   const [accessOpenFor, setAccessOpenFor] = useState<string | null>(null)
+  const [roleByUserId, setRoleByUserId] = useState<Record<string, string>>({})
+
+  useEffect(() => {
+    const userIds = employees.map((e) => e.user_id).filter((id): id is string => !!id)
+    if (userIds.length === 0) return setRoleByUserId({})
+    supabase
+      .from('user_roles')
+      .select('user_id, role')
+      .in('user_id', userIds)
+      .then(({ data }) => setRoleByUserId(Object.fromEntries((data ?? []).map((r) => [r.user_id as string, r.role as string]))))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [employees])
+
+  // The owner/admin account(s) — anyone holding the dentist role — get their
+  // own section at the top instead of blending into the general staff list.
+  const administrators = employees.filter((e) => e.user_id && roleByUserId[e.user_id] === 'dentist')
+  const staff = employees.filter((e) => !(e.user_id && roleByUserId[e.user_id] === 'dentist'))
 
   async function handleSave(payload: Record<string, unknown>, file: File | null, id?: string) {
     if (!isDentist && !can('employees', 'edit')) return
@@ -221,13 +238,91 @@ function EmployeesTab({
     else onProvidersChanged()
   }
 
+  function renderEmployeeRow(e: Employee, allowDelete: boolean) {
+    return editingId === e.id ? (
+      <div key={e.id} className="py-3">
+        <EmployeeForm employee={e} settings={settings} onSave={(p, f) => handleSave(p, f, e.id)} onCancel={() => setEditingId(null)} />
+      </div>
+    ) : (
+      <div key={e.id} className="py-3">
+        <div className="flex items-center justify-between gap-3">
+          <div className="min-w-0">
+            <p className="flex flex-wrap items-center gap-1.5 font-medium text-navy-900">
+              {employeeFullName(e)} {!e.active && <span className="text-xs font-normal text-slate-400">(inactive)</span>}
+              <ExpiryBadge label="Last day" date={e.last_working_day} />
+              <ExpiryBadge label="ID" date={e.national_id_expiry} />
+              {e.user_id ? (
+                <span className="rounded-full bg-green-100 px-1.5 py-0.5 text-[10px] font-semibold text-green-700">Has login</span>
+              ) : (
+                <span className="rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold text-slate-500">No login yet</span>
+              )}
+            </p>
+            <p className="text-xs text-slate-500">
+              {[
+                e.position,
+                isDentist || can('employee_salary', 'view') ? `${formatMoney(Number(e.base_salary), settings)}/mo` : null,
+                e.shift_start && e.shift_end ? `${e.shift_start.slice(0, 5)}–${e.shift_end.slice(0, 5)}` : 'flexible',
+                e.hire_date ? `since ${formatDate(e.hire_date)}` : null,
+              ]
+                .filter(Boolean)
+                .join(' · ')}
+            </p>
+          </div>
+          <div className="flex shrink-0 items-center gap-3">
+            {e.national_id_file_path && <ViewIdButton path={e.national_id_file_path} />}
+            <Can resource="staff_logins" action="view">
+              <button onClick={() => setAccessOpenFor(accessOpenFor === e.id ? null : e.id)} className="text-sm font-medium text-navy-700 hover:underline">
+                {accessOpenFor === e.id ? 'Hide login & access' : 'Login & access'}
+              </button>
+            </Can>
+            <Can resource="employees" action="edit">
+              <button onClick={() => setEditingId(e.id)} className="text-sm font-medium text-navy-700 hover:underline">
+                Edit
+              </button>
+            </Can>
+            {allowDelete && (
+              <Can resource="employees" action="delete">
+                <button onClick={() => handleDelete(e.id)} className="text-sm text-red-600 hover:underline">
+                  Delete
+                </button>
+              </Can>
+            )}
+          </div>
+        </div>
+        {accessOpenFor === e.id && (
+          <LoginAccessPanel
+            personName={employeeFullName(e)}
+            personEmail={e.email}
+            userId={e.user_id}
+            defaultRole={e.position === 'Owner' ? 'dentist' : 'assistant'}
+            onLinked={async (uid) => {
+              await supabase.from('employees').update({ user_id: uid }).eq('id', e.id)
+              onEmployeesChanged()
+            }}
+          />
+        )}
+      </div>
+    )
+  }
+
   return (
     <div className="space-y-4">
+      <div className={card}>
+        <div>
+          <h2 className="font-medium text-navy-900">Administrator</h2>
+          <p className="text-sm text-slate-500">The owner account — full access to everything. Can be edited but never deleted.</p>
+        </div>
+        <div className="divide-y divide-slate-100">
+          {administrators.length === 0 && <p className="py-2 text-sm text-slate-500">No administrator account found.</p>}
+          {administrators.map((e) => renderEmployeeRow(e, false))}
+        </div>
+      </div>
+
       <div className={card}>
         <div className="flex items-center justify-between">
           <div>
             <h2 className="font-medium text-navy-900">Staff</h2>
-            <p className="text-sm text-slate-500">Everyone on the clinic's payroll — the owner, receptionists, dental assistants and other team members.</p>
+            <p className="text-sm text-slate-500">Receptionists, dental assistants and other team members.</p>
           </div>
           <Can resource="employees" action="edit">
             <button
@@ -245,71 +340,8 @@ function EmployeesTab({
         {showAdd && <EmployeeForm settings={settings} onSave={(p, f) => handleSave(p, f, undefined)} onCancel={() => setShowAdd(false)} />}
 
         <div className="divide-y divide-slate-100">
-          {employees.length === 0 && !showAdd && <p className="py-2 text-sm text-slate-500">No employees yet — add one above.</p>}
-          {employees.map((e) =>
-            editingId === e.id ? (
-              <div key={e.id} className="py-3">
-                <EmployeeForm employee={e} settings={settings} onSave={(p, f) => handleSave(p, f, e.id)} onCancel={() => setEditingId(null)} />
-              </div>
-            ) : (
-              <div key={e.id} className="py-3">
-                <div className="flex items-center justify-between gap-3">
-                  <div className="min-w-0">
-                    <p className="flex flex-wrap items-center gap-1.5 font-medium text-navy-900">
-                      {employeeFullName(e)} {!e.active && <span className="text-xs font-normal text-slate-400">(inactive)</span>}
-                      <ExpiryBadge label="Last day" date={e.last_working_day} />
-                      <ExpiryBadge label="ID" date={e.national_id_expiry} />
-                      {e.user_id ? (
-                        <span className="rounded-full bg-green-100 px-1.5 py-0.5 text-[10px] font-semibold text-green-700">Has login</span>
-                      ) : (
-                        <span className="rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold text-slate-500">No login yet</span>
-                      )}
-                    </p>
-                    <p className="text-xs text-slate-500">
-                      {[
-                        e.position,
-                        isDentist || can('employee_salary', 'view') ? `${formatMoney(Number(e.base_salary), settings)}/mo` : null,
-                        e.shift_start && e.shift_end ? `${e.shift_start.slice(0, 5)}–${e.shift_end.slice(0, 5)}` : 'flexible',
-                        e.hire_date ? `since ${formatDate(e.hire_date)}` : null,
-                      ]
-                        .filter(Boolean)
-                        .join(' · ')}
-                    </p>
-                  </div>
-                  <div className="flex shrink-0 items-center gap-3">
-                    {e.national_id_file_path && <ViewIdButton path={e.national_id_file_path} />}
-                    <Can resource="staff_logins" action="view">
-                      <button onClick={() => setAccessOpenFor(accessOpenFor === e.id ? null : e.id)} className="text-sm font-medium text-navy-700 hover:underline">
-                        {accessOpenFor === e.id ? 'Hide login & access' : 'Login & access'}
-                      </button>
-                    </Can>
-                    <Can resource="employees" action="edit">
-                      <button onClick={() => setEditingId(e.id)} className="text-sm font-medium text-navy-700 hover:underline">
-                        Edit
-                      </button>
-                    </Can>
-                    <Can resource="employees" action="delete">
-                      <button onClick={() => handleDelete(e.id)} className="text-sm text-red-600 hover:underline">
-                        Delete
-                      </button>
-                    </Can>
-                  </div>
-                </div>
-                {accessOpenFor === e.id && (
-                  <LoginAccessPanel
-                    personName={employeeFullName(e)}
-                    personEmail={e.email}
-                    userId={e.user_id}
-                    defaultRole={e.position === 'Owner' ? 'dentist' : 'assistant'}
-                    onLinked={async (uid) => {
-                      await supabase.from('employees').update({ user_id: uid }).eq('id', e.id)
-                      onEmployeesChanged()
-                    }}
-                  />
-                )}
-              </div>
-            ),
-          )}
+          {staff.length === 0 && !showAdd && <p className="py-2 text-sm text-slate-500">No employees yet — add one above.</p>}
+          {staff.map((e) => renderEmployeeRow(e, true))}
         </div>
       </div>
 
