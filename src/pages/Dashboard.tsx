@@ -10,6 +10,7 @@ import {
   Provider,
   Employee,
   EmployeeAttendance,
+  employeeFullName,
   patientFullName,
   providerFullName,
   telHref,
@@ -205,6 +206,83 @@ function ClockWidget() {
         </div>
       </div>
       {error && <p className="mt-2 text-xs text-red-600">{error}</p>}
+    </section>
+  )
+}
+
+/** Owner-only "who's in the clinic" roster — every active staff member's
+ * today's clock-in/out at a glance, sorted so whoever is here right now
+ * shows first. Reuses the same green-in / red-out language as the widget
+ * above, but for everyone at once instead of just the signed-in person. */
+function StaffAttendanceOverview() {
+  const { isDentist } = useAuth()
+  const [employees, setEmployees] = useState<Employee[]>([])
+  const [rows, setRows] = useState<EmployeeAttendance[]>([])
+  const [loaded, setLoaded] = useState(false)
+
+  useEffect(() => {
+    if (isDentist) load()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isDentist])
+
+  async function load() {
+    const [{ data: emps }, { data: att }] = await Promise.all([
+      supabase.from('employees').select('*').eq('active', true).order('first_name'),
+      supabase.from('employee_attendance').select('*').eq('work_date', toYmd(new Date())),
+    ])
+    setEmployees((emps as Employee[]) ?? [])
+    setRows((att as EmployeeAttendance[]) ?? [])
+    setLoaded(true)
+  }
+
+  if (!isDentist || !loaded) return null
+
+  const byEmployee = new Map(rows.map((r) => [r.employee_id, r]))
+  const status = (e: Employee) => {
+    const r = byEmployee.get(e.id)
+    if (r?.check_in && !r.check_out) return 'present' as const
+    if (r?.check_in && r.check_out) return 'done' as const
+    return 'absent' as const
+  }
+  const order = { present: 0, done: 1, absent: 2 }
+  const sorted = [...employees].sort((a, b) => order[status(a)] - order[status(b)] || a.first_name.localeCompare(b.first_name))
+  const presentCount = employees.filter((e) => status(e) === 'present').length
+  const doneCount = employees.filter((e) => status(e) === 'done').length
+  const absentCount = employees.length - presentCount - doneCount
+
+  return (
+    <section className="rounded-xl border border-slate-200 bg-white p-4">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <p className="text-sm font-medium text-navy-900">Who's in the clinic</p>
+        <p className="text-xs text-slate-500">
+          <span className="font-medium text-green-700">{presentCount} present</span>
+          {' · '}
+          <span className="font-medium text-red-600">{doneCount} signed out</span>
+          {' · '}
+          <span className="text-slate-400">{absentCount} not in yet</span>
+        </p>
+      </div>
+      <div className="divide-y divide-slate-100">
+        {sorted.length === 0 && <p className="py-2 text-sm text-slate-500">No active staff yet.</p>}
+        {sorted.map((e) => {
+          const r = byEmployee.get(e.id)
+          const s = status(e)
+          return (
+            <div key={e.id} className="flex flex-wrap items-center justify-between gap-x-3 gap-y-0.5 py-2">
+              <p className="text-sm text-navy-900">{employeeFullName(e)}</p>
+              {s === 'present' && (
+                <p className="text-sm font-medium text-green-700">● Signed in at {fmtTime(r!.check_in)}</p>
+              )}
+              {s === 'done' && (
+                <p className="text-sm font-medium text-red-600">
+                  Signed in at {fmtTime(r!.check_in)}, signed out at {fmtTime(r!.check_out)}
+                </p>
+              )}
+              {s === 'absent' && <p className="text-sm text-slate-400">Not signed in yet</p>}
+            </div>
+          )
+        })}
+      </div>
     </section>
   )
 }
@@ -437,6 +515,7 @@ export default function Dashboard() {
       <h1 className="text-2xl font-semibold text-navy-900">Dashboard</h1>
 
       <ClockWidget />
+      <StaffAttendanceOverview />
 
       {/* Quick glance */}
       <section>
