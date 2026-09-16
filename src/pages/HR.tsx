@@ -3,6 +3,8 @@ import { supabase } from '../lib/supabase'
 import { confirmDialog } from '../lib/confirmDialog'
 import { useAuth } from '../context/AuthContext'
 import { useSettings } from '../context/SettingsContext'
+import { StaffGroup } from '../lib/permissions'
+import Can from '../components/Can'
 import {
   Employee,
   EmployeeAttendance,
@@ -164,7 +166,7 @@ function EmployeesTab({
   onEmployeesChanged: () => void
   onProvidersChanged: () => void
 }) {
-  const { session } = useAuth()
+  const { session, isDentist, can } = useAuth()
   const [showAdd, setShowAdd] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [showAddProvider, setShowAddProvider] = useState(false)
@@ -172,6 +174,7 @@ function EmployeesTab({
   const [accessOpenFor, setAccessOpenFor] = useState<string | null>(null)
 
   async function handleSave(payload: Record<string, unknown>, file: File | null, id?: string) {
+    if (!isDentist && !can('employees', 'edit')) return
     let employeeId = id
     if (id) {
       const { error } = await supabase.from('employees').update({ ...payload, updated_by: session?.user.id, updated_at: new Date().toISOString() }).eq('id', id)
@@ -194,6 +197,7 @@ function EmployeesTab({
   }
 
   async function handleDelete(id: string) {
+    if (!isDentist && !can('employees', 'delete')) return
     if (!(await confirmDialog('Delete this employee and all their attendance records? This cannot be undone.'))) return
     const { error } = await supabase.from('employees').delete().eq('id', id)
     if (error) alert(error.message)
@@ -201,6 +205,7 @@ function EmployeesTab({
   }
 
   async function handleSaveProvider(payload: Record<string, unknown>, id?: string) {
+    if (!isDentist && !can('providers', 'edit')) return
     const { error } = id ? await supabase.from('providers').update(payload).eq('id', id) : await supabase.from('providers').insert(payload)
     if (error) return alert(error.message)
     setShowAddProvider(false)
@@ -209,6 +214,7 @@ function EmployeesTab({
   }
 
   async function handleDeleteProvider(id: string) {
+    if (!isDentist && !can('providers', 'delete')) return
     if (!(await confirmDialog('Delete this provider? Their history (visits, treatments) stays, just no longer linked to an active provider.'))) return
     const { error } = await supabase.from('providers').delete().eq('id', id)
     if (error) alert(error.message)
@@ -223,15 +229,17 @@ function EmployeesTab({
             <h2 className="font-medium text-navy-900">Staff</h2>
             <p className="text-sm text-slate-500">Everyone on the clinic's payroll — the owner, receptionists, dental assistants and other team members.</p>
           </div>
-          <button
-            onClick={() => {
-              setShowAdd((s) => !s)
-              setEditingId(null)
-            }}
-            className="shrink-0 rounded-lg border border-slate-300 px-3 py-1.5 text-sm text-navy-800 hover:bg-slate-50"
-          >
-            {showAdd ? 'Cancel' : '+ Add employee'}
-          </button>
+          <Can resource="employees" action="edit">
+            <button
+              onClick={() => {
+                setShowAdd((s) => !s)
+                setEditingId(null)
+              }}
+              className="shrink-0 rounded-lg border border-slate-300 px-3 py-1.5 text-sm text-navy-800 hover:bg-slate-50"
+            >
+              {showAdd ? 'Cancel' : '+ Add employee'}
+            </button>
+          </Can>
         </div>
 
         {showAdd && <EmployeeForm settings={settings} onSave={(p, f) => handleSave(p, f, undefined)} onCancel={() => setShowAdd(false)} />}
@@ -260,7 +268,7 @@ function EmployeesTab({
                     <p className="text-xs text-slate-500">
                       {[
                         e.position,
-                        `${formatMoney(Number(e.base_salary), settings)}/mo`,
+                        isDentist || can('employee_salary', 'view') ? `${formatMoney(Number(e.base_salary), settings)}/mo` : null,
                         e.shift_start && e.shift_end ? `${e.shift_start.slice(0, 5)}–${e.shift_end.slice(0, 5)}` : 'flexible',
                         e.hire_date ? `since ${formatDate(e.hire_date)}` : null,
                       ]
@@ -270,15 +278,21 @@ function EmployeesTab({
                   </div>
                   <div className="flex shrink-0 items-center gap-3">
                     {e.national_id_file_path && <ViewIdButton path={e.national_id_file_path} />}
-                    <button onClick={() => setAccessOpenFor(accessOpenFor === e.id ? null : e.id)} className="text-sm font-medium text-navy-700 hover:underline">
-                      {accessOpenFor === e.id ? 'Hide login & access' : 'Login & access'}
-                    </button>
-                    <button onClick={() => setEditingId(e.id)} className="text-sm font-medium text-navy-700 hover:underline">
-                      Edit
-                    </button>
-                    <button onClick={() => handleDelete(e.id)} className="text-sm text-red-600 hover:underline">
-                      Delete
-                    </button>
+                    <Can resource="staff_logins" action="view">
+                      <button onClick={() => setAccessOpenFor(accessOpenFor === e.id ? null : e.id)} className="text-sm font-medium text-navy-700 hover:underline">
+                        {accessOpenFor === e.id ? 'Hide login & access' : 'Login & access'}
+                      </button>
+                    </Can>
+                    <Can resource="employees" action="edit">
+                      <button onClick={() => setEditingId(e.id)} className="text-sm font-medium text-navy-700 hover:underline">
+                        Edit
+                      </button>
+                    </Can>
+                    <Can resource="employees" action="delete">
+                      <button onClick={() => handleDelete(e.id)} className="text-sm text-red-600 hover:underline">
+                        Delete
+                      </button>
+                    </Can>
                   </div>
                 </div>
                 {accessOpenFor === e.id && (
@@ -305,15 +319,17 @@ function EmployeesTab({
             <h2 className="font-medium text-navy-900">Providers (doctors)</h2>
             <p className="text-sm text-slate-500">Clinical staff who get scheduled for appointments and treat patients.</p>
           </div>
-          <button
-            onClick={() => {
-              setShowAddProvider((s) => !s)
-              setEditingProviderId(null)
-            }}
-            className="shrink-0 rounded-lg border border-slate-300 px-3 py-1.5 text-sm text-navy-800 hover:bg-slate-50"
-          >
-            {showAddProvider ? 'Cancel' : '+ Add provider'}
-          </button>
+          <Can resource="providers" action="edit">
+            <button
+              onClick={() => {
+                setShowAddProvider((s) => !s)
+                setEditingProviderId(null)
+              }}
+              className="shrink-0 rounded-lg border border-slate-300 px-3 py-1.5 text-sm text-navy-800 hover:bg-slate-50"
+            >
+              {showAddProvider ? 'Cancel' : '+ Add provider'}
+            </button>
+          </Can>
         </div>
         {showAddProvider && <ProviderFields onSave={(payload) => handleSaveProvider(payload)} onCancel={() => setShowAddProvider(false)} />}
         <div className="divide-y divide-slate-100">
@@ -338,15 +354,21 @@ function EmployeesTab({
                     <p className="text-xs text-slate-500">{[p.specialty, p.email, p.phone].filter(Boolean).join(' · ') || '—'}</p>
                   </div>
                   <div className="flex shrink-0 gap-3">
-                    <button onClick={() => setAccessOpenFor(accessOpenFor === p.id ? null : p.id)} className="text-sm font-medium text-navy-700 hover:underline">
-                      {accessOpenFor === p.id ? 'Hide login & access' : 'Login & access'}
-                    </button>
-                    <button onClick={() => setEditingProviderId(p.id)} className="text-sm font-medium text-navy-700 hover:underline">
-                      Edit
-                    </button>
-                    <button onClick={() => handleDeleteProvider(p.id)} className="text-sm text-red-600 hover:underline">
-                      Delete
-                    </button>
+                    <Can resource="staff_logins" action="view">
+                      <button onClick={() => setAccessOpenFor(accessOpenFor === p.id ? null : p.id)} className="text-sm font-medium text-navy-700 hover:underline">
+                        {accessOpenFor === p.id ? 'Hide login & access' : 'Login & access'}
+                      </button>
+                    </Can>
+                    <Can resource="providers" action="edit">
+                      <button onClick={() => setEditingProviderId(p.id)} className="text-sm font-medium text-navy-700 hover:underline">
+                        Edit
+                      </button>
+                    </Can>
+                    <Can resource="providers" action="delete">
+                      <button onClick={() => handleDeleteProvider(p.id)} className="text-sm text-red-600 hover:underline">
+                        Delete
+                      </button>
+                    </Can>
                   </div>
                 </div>
                 {accessOpenFor === p.id && (
@@ -386,12 +408,14 @@ function LoginAccessPanel({
   defaultRole: string
   onLinked: (userId: string) => void
 }) {
-  const { session } = useAuth()
+  const { session, isDentist, can } = useAuth()
   const [creating, setCreating] = useState(false)
   const [msg, setMsg] = useState<string | null>(null)
   const [username, setUsername] = useState('')
   const [role, setRole] = useState<string | null>(null)
   const [pageAccess, setPageAccess] = useState<Record<string, boolean> | null>(null)
+  const [groups, setGroups] = useState<StaffGroup[]>([])
+  const [groupId, setGroupId] = useState<string | null>(null)
   const [savingUsername, setSavingUsername] = useState(false)
   const [newPassword, setNewPassword] = useState('')
   const [resettingPw, setResettingPw] = useState(false)
@@ -403,19 +427,24 @@ function LoginAccessPanel({
   }, [userId])
 
   async function loadExisting(uid: string) {
-    const [{ data: profile }, { data: roleRows }, { data: accessRows }] = await Promise.all([
+    const [{ data: profile }, { data: roleRows }, { data: accessRows }, { data: groupRows }, { data: employeeRow }] = await Promise.all([
       supabase.from('profiles').select('username').eq('id', uid).maybeSingle(),
       supabase.from('user_roles').select('role').eq('user_id', uid),
       supabase.from('user_page_access').select('page, allowed').eq('user_id', uid),
+      supabase.from('staff_groups').select('*').order('name'),
+      supabase.from('employees').select('group_id').eq('user_id', uid).maybeSingle(),
     ])
     setUsername((profile as { username: string | null } | null)?.username ?? '')
     setRole(((roleRows ?? [])[0] as { role: string } | undefined)?.role ?? null)
     const overrides = Object.fromEntries((accessRows ?? []).map((r) => [(r as { page: string }).page, (r as { allowed: boolean }).allowed]))
     setPageAccess({ ...DEFAULT_PAGE_ACCESS, ...overrides })
+    setGroups((groupRows as StaffGroup[]) ?? [])
+    setGroupId((employeeRow as { group_id: string | null } | null)?.group_id ?? null)
   }
 
   async function handleCreateLogin(e: FormEvent<HTMLFormElement>) {
     e.preventDefault()
+    if (!isDentist && !can('staff_logins', 'edit')) return
     const f = new FormData(e.currentTarget)
     setCreating(true)
     setMsg(null)
@@ -438,7 +467,7 @@ function LoginAccessPanel({
   }
 
   async function handleSaveUsername() {
-    if (!userId) return
+    if (!userId || (!isDentist && !can('staff_logins', 'edit'))) return
     setSavingUsername(true)
     const { data, error } = await supabase.functions.invoke('admin-create-user', { body: { action: 'update_user', user_id: userId, username } })
     setSavingUsername(false)
@@ -447,6 +476,7 @@ function LoginAccessPanel({
   }
 
   async function handleResetPassword() {
+    if (!isDentist && !can('staff_logins', 'edit')) return
     if (!userId || newPassword.length < 6) return setMsg('⚠ New password must be at least 6 characters.')
     setResettingPw(true)
     const { data, error } = await supabase.functions.invoke('admin-create-user', { body: { action: 'update_user', user_id: userId, new_password: newPassword } })
@@ -457,7 +487,7 @@ function LoginAccessPanel({
   }
 
   async function handleSetRole(newRole: string) {
-    if (!userId) return
+    if (!userId || (!isDentist && !can('staff_logins', 'edit'))) return
     await supabase.from('user_roles').delete().eq('user_id', userId)
     const { error } = await supabase.from('user_roles').insert({ user_id: userId, role: newRole })
     if (error) return alert(error.message)
@@ -465,9 +495,16 @@ function LoginAccessPanel({
   }
 
   async function handleTogglePage(page: PageKey, allowed: boolean) {
-    if (!userId) return
+    if (!userId || (!isDentist && !can('staff_logins', 'edit'))) return
     setPageAccess((cur) => ({ ...(cur ?? DEFAULT_PAGE_ACCESS), [page]: allowed }))
     const { error } = await supabase.from('user_page_access').upsert({ user_id: userId, page, allowed }, { onConflict: 'user_id,page' })
+    if (error) alert(error.message)
+  }
+
+  async function handleSetGroup(newGroupId: string) {
+    if (!userId || (!isDentist && !can('staff_logins', 'edit'))) return
+    setGroupId(newGroupId || null)
+    const { error } = await supabase.from('employees').update({ group_id: newGroupId || null }).eq('user_id', userId)
     if (error) alert(error.message)
   }
 
@@ -534,15 +571,28 @@ function LoginAccessPanel({
       {role === 'dentist' ? (
         <p className="text-xs text-slate-400">The owner role always has full access to every page — nothing to configure here.</p>
       ) : (
-        <div>
-          <p className="mb-1 text-xs text-slate-500">Pages this person can open:</p>
-          <div className="flex flex-wrap gap-3">
-            {(Object.keys(PAGE_LABELS) as PageKey[]).map((page) => (
-              <label key={page} className="flex items-center gap-1.5 text-sm text-navy-800">
-                <input type="checkbox" checked={pageAccess?.[page] ?? DEFAULT_PAGE_ACCESS[page]} onChange={(e) => handleTogglePage(page, e.target.checked)} />
-                {PAGE_LABELS[page]}
-              </label>
-            ))}
+        <div className="space-y-3">
+          <div>
+            <label className="mb-1 block text-xs text-slate-500">Staff group (what they can view/edit/delete — set up in Settings → Security)</label>
+            <select value={groupId ?? ''} onChange={(e) => handleSetGroup(e.target.value)} className={input}>
+              <option value="">No group — no access until assigned</option>
+              {groups.map((g) => (
+                <option key={g.id} value={g.id}>
+                  {g.name}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <p className="mb-1 text-xs text-slate-500">Pages this person can open:</p>
+            <div className="flex flex-wrap gap-3">
+              {(Object.keys(PAGE_LABELS) as PageKey[]).map((page) => (
+                <label key={page} className="flex items-center gap-1.5 text-sm text-navy-800">
+                  <input type="checkbox" checked={pageAccess?.[page] ?? DEFAULT_PAGE_ACCESS[page]} onChange={(e) => handleTogglePage(page, e.target.checked)} />
+                  {PAGE_LABELS[page]}
+                </label>
+              ))}
+            </div>
           </div>
         </div>
       )}
@@ -641,9 +691,12 @@ function EmployeeForm({
   onSave: (payload: Record<string, unknown>, file: File | null) => void
   onCancel: () => void
 }) {
+  const { isDentist, can } = useAuth()
   const [file, setFile] = useState<File | null>(null)
   const [hoursMode, setHoursMode] = useState<'shift' | 'flexible'>(employee && !employee.shift_start ? 'flexible' : 'shift')
   const input = 'w-full rounded-lg border border-slate-300 px-3 py-2 text-sm'
+  const canViewSalary = isDentist || can('employee_salary', 'view')
+  const canEditSalary = isDentist || can('employee_salary', 'edit')
 
   function handleSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault()
@@ -741,10 +794,23 @@ function EmployeeForm({
 
       <div className="sm:col-span-2 mt-1 grid gap-3 rounded-lg border border-slate-200 bg-white p-3 sm:grid-cols-2">
         <p className="text-sm font-medium text-navy-900 sm:col-span-2">Salary &amp; hours</p>
-        <div>
-          <label className="mb-1 block text-xs text-slate-500">Monthly base salary ({settings.currency})</label>
-          <input name="base_salary" type="number" step="0.01" min="0" defaultValue={employee?.base_salary ?? 0} className={input} />
-        </div>
+        {canViewSalary ? (
+          <div>
+            <label className="mb-1 block text-xs text-slate-500">Monthly base salary ({settings.currency})</label>
+            <input
+              name="base_salary"
+              type="number"
+              step="0.01"
+              min="0"
+              defaultValue={employee?.base_salary ?? 0}
+              readOnly={!canEditSalary}
+              title={!canEditSalary ? "You don't have permission to change salaries" : undefined}
+              className={`${input} ${!canEditSalary ? 'bg-slate-50 text-slate-500' : ''}`}
+            />
+          </div>
+        ) : (
+          <input type="hidden" name="base_salary" value={employee?.base_salary ?? 0} />
+        )}
         <div>
           <label className="mb-1 block text-xs text-slate-500">Overtime rate (per extra hour, {settings.currency})</label>
           <input name="overtime_hourly_rate" type="number" step="0.01" min="0" defaultValue={employee?.overtime_hourly_rate ?? 0} className={input} />
@@ -815,7 +881,7 @@ function EmployeeForm({
 // Attendance tab
 // ============================================================
 function AttendanceTab({ employees, settings }: { employees: Employee[]; settings: AppSettings }) {
-  const { session } = useAuth()
+  const { session, isDentist, can } = useAuth()
   const [employeeId, setEmployeeId] = useState(employees[0]?.id ?? '')
   const [month, setMonth] = useState(() => toYmd(new Date()).slice(0, 7)) // yyyy-mm
   const [rows, setRows] = useState<EmployeeAttendance[]>([])
@@ -846,6 +912,7 @@ function AttendanceTab({ employees, settings }: { employees: Employee[]; setting
 
   async function handleSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault()
+    if (!isDentist && !can('attendance', 'edit')) return
     const f = new FormData(e.currentTarget)
     const { error } = await supabase.from('employee_attendance').upsert(
       {
@@ -865,6 +932,7 @@ function AttendanceTab({ employees, settings }: { employees: Employee[]; setting
   }
 
   async function handleDelete(id: string) {
+    if (!isDentist && !can('attendance', 'delete')) return
     const { error } = await supabase.from('employee_attendance').delete().eq('id', id)
     if (error) alert(error.message)
     else loadRows()
@@ -1155,7 +1223,7 @@ function buildPayslip(
 // Leave tab
 // ============================================================
 function LeaveTab({ employees, settings }: { employees: Employee[]; settings: AppSettings }) {
-  const { session } = useAuth()
+  const { session, isDentist, can } = useAuth()
   const [employeeId, setEmployeeId] = useState(employees[0]?.id ?? '')
   const [year, setYear] = useState(new Date().getFullYear())
   const [leaves, setLeaves] = useState<EmployeeLeave[]>([])
@@ -1176,6 +1244,7 @@ function LeaveTab({ employees, settings }: { employees: Employee[]; settings: Ap
 
   async function handleAdd(e: FormEvent<HTMLFormElement>) {
     e.preventDefault()
+    if (!isDentist && !can('leave', 'edit')) return
     const f = new FormData(e.currentTarget)
     const start = f.get('start_date') as string
     const end = (f.get('end_date') as string) || start
@@ -1208,12 +1277,14 @@ function LeaveTab({ employees, settings }: { employees: Employee[]; settings: Ap
   }
 
   async function setStatus(id: string, status: LeaveStatus) {
+    if (!isDentist && !can('leave', 'edit')) return
     const { error } = await supabase.from('employee_leave').update({ status }).eq('id', id)
     if (error) alert(error.message)
     else loadLeaves()
   }
 
   async function handleDelete(id: string) {
+    if (!isDentist && !can('leave', 'delete')) return
     if (!(await confirmDialog('Delete this leave record?'))) return
     const { error } = await supabase.from('employee_leave').delete().eq('id', id)
     if (error) alert(error.message)
@@ -1365,7 +1436,7 @@ function LeaveTab({ employees, settings }: { employees: Employee[]; settings: Ap
 // Deductions & loans tab
 // ============================================================
 function DeductionsTab({ employees, settings }: { employees: Employee[]; settings: AppSettings }) {
-  const { session } = useAuth()
+  const { session, isDentist, can } = useAuth()
   const [employeeId, setEmployeeId] = useState(employees[0]?.id ?? '')
   const [items, setItems] = useState<EmployeeDeduction[]>([])
   const [payments, setPayments] = useState<DeductionPayment[]>([])
@@ -1398,6 +1469,7 @@ function DeductionsTab({ employees, settings }: { employees: Employee[]; setting
 
   async function handleAdd(e: FormEvent<HTMLFormElement>) {
     e.preventDefault()
+    if (!isDentist && !can('deductions', 'edit')) return
     const f = new FormData(e.currentTarget)
     const useDays = kind === 'deduction' && unit === 'work_days'
     let total: number
@@ -1448,6 +1520,7 @@ function DeductionsTab({ employees, settings }: { employees: Employee[]; setting
   // remaining balance (shortening future installments). For a LOAN, the money comes back to the
   // clinic → record it as income. For a deduction (penalty) it just stops the salary deductions.
   async function recordPayment(d: EmployeeDeduction, amount: number, paidOn: string) {
+    if (!isDentist && !can('deductions', 'edit')) return
     const remaining = Number(d.total_amount) - Number(d.amount_settled)
     if (!(amount > 0)) return
     const capped = Math.min(amount, remaining)
@@ -1488,6 +1561,7 @@ function DeductionsTab({ employees, settings }: { employees: Employee[]; setting
   // if needed, and remove the linked income entry. (Salary deductions come from payroll and can't
   // be undone here.)
   async function handleDeletePayment(d: EmployeeDeduction, p: DeductionPayment) {
+    if (!isDentist && !can('deductions', 'delete')) return
     if (p.kind === 'salary_deduction') {
       alert('This installment was taken by a finalized payroll and cannot be undone here.')
       return
@@ -1522,6 +1596,7 @@ function DeductionsTab({ employees, settings }: { employees: Employee[]; setting
   }
 
   async function handleDelete(id: string) {
+    if (!isDentist && !can('deductions', 'delete')) return
     if (!(await confirmDialog('Delete this record and its payment history entirely?'))) return
     const { error } = await supabase.from('employee_deductions').delete().eq('id', id)
     if (error) alert(error.message)
@@ -1724,7 +1799,7 @@ type Payslip = {
 }
 
 function PayrollTab({ employees, settings, onChanged }: { employees: Employee[]; settings: AppSettings; onChanged: () => void }) {
-  const { session } = useAuth()
+  const { session, isDentist, can } = useAuth()
   const [month, setMonth] = useState(() => toYmd(new Date()).slice(0, 7))
   const [slips, setSlips] = useState<Payslip[]>([])
   const [poolInfo, setPoolInfo] = useState({ netPrev: 0, pool: 0, perEmployee: 0 })
@@ -1807,6 +1882,7 @@ function PayrollTab({ employees, settings, onChanged }: { employees: Employee[];
   }
 
   async function handleFinalize() {
+    if (!isDentist && !can('payroll', 'edit')) return
     if (run) return
     if (slips.length === 0) return alert('No employees to pay.')
     if (!(await confirmDialog(`Finalize payroll for ${payMonth.toLocaleString('en', { month: 'long', year: 'numeric' })}? This locks the payslips, advances any loan/deduction installments, and records the total as an expense.`))) return

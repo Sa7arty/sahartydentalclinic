@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { confirmDialog } from '../lib/confirmDialog'
+import Can from '../components/Can'
 import {
   Visit,
   Patient,
@@ -339,7 +340,7 @@ function useScheduleResize(onResize: (visitId: string, newScheduledAtISO: string
 }
 
 export default function Schedule() {
-  const { locationIds, isDentist } = useAuth()
+  const { locationIds, isDentist, can } = useAuth()
   const { settings } = useSettings()
   const navigate = useNavigate()
   const [locations, setLocations] = useState<Location[]>([])
@@ -388,6 +389,7 @@ export default function Schedule() {
   }
 
   async function handleChangeStatus(visitId: string, status: VisitStatus) {
+    if (!isDentist && !can('visits', 'edit')) return
     setVisits((cur) => cur.map((v) => (v.id === visitId ? { ...v, status } : v)))
     const { error } = await supabase.from('visits').update({ status }).eq('id', visitId)
     if (error) alert(error.message)
@@ -396,12 +398,14 @@ export default function Schedule() {
 
   /** Double-clicked an empty grid slot — open Add Visit with the date/time prefilled. */
   function handleCreateVisitAt(ymd: string, minutesFromMidnight: number) {
+    if (!isDentist && !can('visits', 'edit')) return
     setAddVisitPrefill(ymdAndMinutesToDate(ymd, minutesFromMidnight).toISOString())
     setAddVisitOpen(true)
   }
 
   /** Dragged an appointment block to a new slot (and possibly a new day, in Week view). */
   async function handleReschedule(visitId: string, targetYmd: string, minutesFromMidnight: number) {
+    if (!isDentist && !can('visits', 'edit')) return
     const scheduledAt = ymdAndMinutesToDate(targetYmd, minutesFromMidnight).toISOString()
     setVisits((cur) => cur.map((v) => (v.id === visitId ? { ...v, scheduled_at: scheduledAt } : v)))
     const { error } = await supabase.from('visits').update({ scheduled_at: scheduledAt }).eq('id', visitId)
@@ -411,6 +415,7 @@ export default function Schedule() {
 
   /** Dragged an appointment block's top or bottom edge to change its length. */
   async function handleResizeVisit(visitId: string, newScheduledAtISO: string, newDurationMinutes: number) {
+    if (!isDentist && !can('visits', 'edit')) return
     setVisits((cur) => cur.map((v) => (v.id === visitId ? { ...v, scheduled_at: newScheduledAtISO, duration_minutes: newDurationMinutes } : v)))
     const { error } = await supabase.from('visits').update({ scheduled_at: newScheduledAtISO, duration_minutes: newDurationMinutes }).eq('id', visitId)
     if (error) alert(error.message)
@@ -419,6 +424,7 @@ export default function Schedule() {
 
   async function handleSaveVisitEdit(patch: Record<string, unknown>) {
     if (!editingVisit) return
+    if (!isDentist && !can('visits', 'edit')) return
     if ('provider_id' in patch && patch.provider_id !== editingVisit.provider_id) patch.google_event_id = null
     const { error } = await supabase.from('visits').update(patch).eq('id', editingVisit.id)
     if (error) alert(error.message)
@@ -431,6 +437,7 @@ export default function Schedule() {
   }
 
   async function handleDeleteVisit(visitId: string) {
+    if (!isDentist && !can('visits', 'delete')) return
     if (!(await confirmDialog('Delete this appointment? This cannot be undone.'))) return
     deleteVisitFromGoogle(visitId)
     const { error } = await supabase.from('visits').delete().eq('id', visitId)
@@ -505,15 +512,17 @@ export default function Schedule() {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-2xl font-semibold text-navy-900">Schedule</h1>
         <div className="flex items-center gap-2">
-          <button
-            onClick={() => {
-              setAddVisitPrefill(null)
-              setAddVisitOpen(true)
-            }}
-            className="rounded-lg bg-navy-900 px-4 py-2 text-sm font-medium text-white hover:bg-navy-800"
-          >
-            + Add visit
-          </button>
+          <Can resource="visits" action="edit">
+            <button
+              onClick={() => {
+                setAddVisitPrefill(null)
+                setAddVisitOpen(true)
+              }}
+              className="rounded-lg bg-navy-900 px-4 py-2 text-sm font-medium text-white hover:bg-navy-800"
+            >
+              + Add visit
+            </button>
+          </Can>
           {view === 'day' && (
             <button onClick={handleExportDay} className="rounded-lg border border-slate-300 px-3 py-2 text-sm text-navy-800 hover:bg-slate-50">
               Export day (PDF)

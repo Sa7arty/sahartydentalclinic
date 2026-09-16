@@ -5,7 +5,7 @@ import { confirmDialog } from '../lib/confirmDialog'
 import { syncVisitToGoogle, deleteVisitFromGoogle } from '../lib/googleCalendarSync'
 import { useAuth } from '../context/AuthContext'
 import { useSettings } from '../context/SettingsContext'
-import RoleGate from '../components/RoleGate'
+import Can from '../components/Can'
 import PatientForm from '../components/PatientForm'
 import PatientBadges from '../components/PatientBadges'
 import ToothChart from '../components/ToothChart'
@@ -719,20 +719,22 @@ export default function PatientDetail() {
         </div>
         {tab === 'info' && !editing && (
           <div className="flex gap-2">
-            <button
-              onClick={() => setEditing(true)}
-              className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-navy-800 hover:bg-slate-50"
-            >
-              Edit patient
-            </button>
-            <RoleGate allow={['dentist']}>
+            <Can resource="patients" action="edit">
+              <button
+                onClick={() => setEditing(true)}
+                className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-navy-800 hover:bg-slate-50"
+              >
+                Edit patient
+              </button>
+            </Can>
+            <Can resource="patients" action="delete">
               <button
                 onClick={handleDeletePatient}
                 className="rounded-lg border border-red-200 px-4 py-2 text-sm font-medium text-red-600 hover:bg-red-50"
               >
                 Delete
               </button>
-            </RoleGate>
+            </Can>
           </div>
         )}
       </div>
@@ -892,6 +894,7 @@ export default function PatientDetail() {
 
       {tab === 'visits' && (
         <div className="space-y-4">
+          <Can resource="visits" action="edit">
           <form onSubmit={handleNewVisit} className="flex flex-wrap items-end gap-3 rounded-xl border border-slate-200 bg-white p-4">
             <div>
               <label className="mb-1 block text-sm text-slate-500">Schedule a visit</label>
@@ -919,6 +922,7 @@ export default function PatientDetail() {
               Add visit
             </button>
           </form>
+          </Can>
           <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
             {visits.length === 0 && <p className="p-4 text-sm text-slate-500">No visits yet.</p>}
             {visits.map((v) => {
@@ -999,12 +1003,16 @@ export default function PatientDetail() {
                         className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
                       />
                       <div className="flex gap-2">
-                        <button onClick={() => handleSaveVisit(v.id)} className="rounded-lg bg-navy-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-navy-800">
-                          Save changes
-                        </button>
-                        <button onClick={() => handleDeleteVisit(v.id)} className="rounded-lg border border-red-200 px-3 py-1.5 text-sm text-red-600 hover:bg-red-50">
-                          Delete appointment
-                        </button>
+                        <Can resource="visits" action="edit">
+                          <button onClick={() => handleSaveVisit(v.id)} className="rounded-lg bg-navy-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-navy-800">
+                            Save changes
+                          </button>
+                        </Can>
+                        <Can resource="visits" action="delete">
+                          <button onClick={() => handleDeleteVisit(v.id)} className="rounded-lg border border-red-200 px-3 py-1.5 text-sm text-red-600 hover:bg-red-50">
+                            Delete appointment
+                          </button>
+                        </Can>
                       </div>
                     </div>
                   )}
@@ -1111,7 +1119,7 @@ export default function PatientDetail() {
       )}
 
       {tab === 'notes' && (
-        <RoleGate allow={['dentist']} fallback={<p className="text-sm text-slate-500">Clinical notes are visible to dentists only.</p>}>
+        <Can resource="clinical_notes" action="view" fallback={<p className="text-sm text-slate-500">You don't have access to clinical notes.</p>}>
           <div className="space-y-4">
             <form onSubmit={handleNewNote} className="space-y-3 rounded-xl border border-slate-200 bg-white p-4">
               <textarea name="note" placeholder="Clinical note" className="w-full rounded-lg border border-slate-300 px-3 py-2" />
@@ -1183,17 +1191,17 @@ export default function PatientDetail() {
               })}
             </div>
           </div>
-        </RoleGate>
+        </Can>
       )}
 
       {tab === 'teeth' && (
-        <RoleGate allow={['dentist']} fallback={<p className="text-sm text-slate-500">The tooth chart is visible to dentists only.</p>}>
+        <Can resource="tooth_chart" action="view" fallback={<p className="text-sm text-slate-500">You don't have access to the tooth chart.</p>}>
           {id && <ToothChart patientId={id} />}
-        </RoleGate>
+        </Can>
       )}
 
       {tab === 'photos' && (
-        <RoleGate allow={['dentist']} fallback={<p className="text-sm text-slate-500">Documents are visible to dentists only.</p>}>
+        <Can resource="documents" action="view" fallback={<p className="text-sm text-slate-500">You don't have access to documents.</p>}>
           <div className="space-y-4">
             <form onSubmit={handleUploadPhoto} className="flex flex-wrap items-end gap-3 rounded-xl border border-slate-200 bg-white p-4">
               <div>
@@ -1246,7 +1254,7 @@ export default function PatientDetail() {
               })}
             </div>
           </div>
-        </RoleGate>
+        </Can>
       )}
 
       {tab === 'ledger' && (
@@ -1264,6 +1272,7 @@ export default function PatientDetail() {
             </button>
           </div>
 
+          <Can resource="patient_ledger" action="edit">
           <form onSubmit={handleAddTransaction} className="flex flex-wrap items-end gap-3 rounded-xl border border-slate-200 bg-white p-4">
             <div>
               <label className="mb-1 block text-xs text-slate-500">Type</label>
@@ -1316,6 +1325,7 @@ export default function PatientDetail() {
               Add
             </button>
           </form>
+          </Can>
 
           <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
             {cashflow.length === 0 && <p className="p-4 text-sm text-slate-500">No transactions yet.</p>}
@@ -1380,12 +1390,16 @@ export default function PatientDetail() {
                           Receipt
                         </button>
                       )}
-                      <button onClick={() => setEditingLedgerId(row.ledger.id)} className="text-xs font-medium text-navy-700 hover:underline">
-                        Edit
-                      </button>
-                      <button onClick={() => handleDeleteLedgerEntry(row.ledger.id)} className="text-xs text-red-600 hover:underline">
-                        Delete
-                      </button>
+                      <Can resource="patient_ledger" action="edit">
+                        <button onClick={() => setEditingLedgerId(row.ledger.id)} className="text-xs font-medium text-navy-700 hover:underline">
+                          Edit
+                        </button>
+                      </Can>
+                      <Can resource="patient_ledger" action="delete">
+                        <button onClick={() => handleDeleteLedgerEntry(row.ledger.id)} className="text-xs text-red-600 hover:underline">
+                          Delete
+                        </button>
+                      </Can>
                     </div>
                   </div>
                 )
@@ -1434,12 +1448,16 @@ export default function PatientDetail() {
                   </div>
                   <div className="flex shrink-0 items-center gap-3">
                     <p className="font-medium text-red-600">−{money(Number(row.cost.amount))}</p>
-                    <button onClick={() => setEditingCostId(row.cost.id)} className="text-xs font-medium text-navy-700 hover:underline">
-                      Edit
-                    </button>
-                    <button onClick={() => handleDeleteClinicCost(row.cost.id)} className="text-xs text-red-600 hover:underline">
-                      Delete
-                    </button>
+                    <Can resource="clinic_finances" action="edit">
+                      <button onClick={() => setEditingCostId(row.cost.id)} className="text-xs font-medium text-navy-700 hover:underline">
+                        Edit
+                      </button>
+                    </Can>
+                    <Can resource="clinic_finances" action="delete">
+                      <button onClick={() => handleDeleteClinicCost(row.cost.id)} className="text-xs text-red-600 hover:underline">
+                        Delete
+                      </button>
+                    </Can>
                   </div>
                 </div>
               ),
@@ -1450,6 +1468,7 @@ export default function PatientDetail() {
 
       {tab === 'prescriptions' && (
         <div className="space-y-4">
+          <Can resource="prescriptions" action="edit">
           <div className="rounded-xl border border-slate-200 bg-white p-4">
             <h2 className="mb-3 font-medium text-navy-900">New prescription</h2>
             <div className="mb-3">
@@ -1493,6 +1512,7 @@ export default function PatientDetail() {
               Save &amp; print (PDF)
             </button>
           </div>
+          </Can>
 
           <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
             <p className="border-b border-slate-100 bg-slate-50 px-4 py-2 text-sm font-medium text-navy-900">Past prescriptions</p>
@@ -1512,9 +1532,11 @@ export default function PatientDetail() {
                   <button onClick={() => reprintPrescription(p)} className="text-xs font-medium text-navy-700 hover:underline">
                     Print
                   </button>
-                  <button onClick={() => handleDeletePrescription(p.id)} className="text-xs text-red-600 hover:underline">
-                    Delete
-                  </button>
+                  <Can resource="prescriptions" action="delete">
+                    <button onClick={() => handleDeletePrescription(p.id)} className="text-xs text-red-600 hover:underline">
+                      Delete
+                    </button>
+                  </Can>
                 </div>
               </div>
             ))}
@@ -1524,6 +1546,7 @@ export default function PatientDetail() {
 
       {tab === 'letters' && (
         <div className="space-y-4">
+          <Can resource="letters" action="edit">
           <div className="rounded-xl border border-slate-200 bg-white p-4">
             <h2 className="mb-3 font-medium text-navy-900">New letter</h2>
 
@@ -1637,6 +1660,7 @@ export default function PatientDetail() {
               Save &amp; print (PDF)
             </button>
           </div>
+          </Can>
 
           <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
             <p className="border-b border-slate-100 bg-slate-50 px-4 py-2 text-sm font-medium text-navy-900">Past letters</p>
@@ -1654,9 +1678,11 @@ export default function PatientDetail() {
                   <button onClick={() => reprintLetter(l)} className="text-xs font-medium text-navy-700 hover:underline">
                     Print
                   </button>
-                  <button onClick={() => handleDeleteLetter(l.id)} className="text-xs text-red-600 hover:underline">
-                    Delete
-                  </button>
+                  <Can resource="letters" action="delete">
+                    <button onClick={() => handleDeleteLetter(l.id)} className="text-xs text-red-600 hover:underline">
+                      Delete
+                    </button>
+                  </Can>
                 </div>
               </div>
             ))}

@@ -705,6 +705,41 @@ create policy "dentist manages employees" on public.employees for all
 create policy "staff can view own employee record" on public.employees for select
   using (user_id = auth.uid());
 
+-- Added 2026-09-16 (staff_groups_and_permissions): Settings → Security. A
+-- second, additive access-control layer on top of the dentist/front_desk
+-- role split above — that split still governs real database RLS everywhere
+-- else and is untouched. These "groups" (owner-named and owner-creatable,
+-- e.g. "Front Desk / Receptionist", "Dental Assistant") only drive UI-level
+-- View/Edit/Delete gating per app/lib/permissions.ts's resource list, via
+-- AuthContext's `can(resource, action)`. Dentists are never a configurable
+-- group — they keep full access unconditionally, as before.
+create table public.staff_groups (
+  id uuid primary key default gen_random_uuid(),
+  name text not null unique,
+  created_at timestamptz not null default now()
+);
+alter table public.staff_groups enable row level security;
+create policy "dentist manages staff groups" on public.staff_groups for all
+  using (public.has_role(auth.uid(), 'dentist')) with check (public.has_role(auth.uid(), 'dentist'));
+create policy "staff can view staff groups" on public.staff_groups for select
+  using (true);
+
+alter table public.employees add column group_id uuid references public.staff_groups(id) on delete set null;
+
+create table public.group_permissions (
+  group_id uuid not null references public.staff_groups(id) on delete cascade,
+  resource_key text not null,
+  can_view boolean not null default false,
+  can_edit boolean not null default false,
+  can_delete boolean not null default false,
+  primary key (group_id, resource_key)
+);
+alter table public.group_permissions enable row level security;
+create policy "dentist manages group permissions" on public.group_permissions for all
+  using (public.has_role(auth.uid(), 'dentist')) with check (public.has_role(auth.uid(), 'dentist'));
+create policy "staff can view group permissions" on public.group_permissions for select
+  using (true);
+
 create table public.employee_attendance (
   id uuid primary key default gen_random_uuid(),
   employee_id uuid not null references public.employees(id) on delete cascade,

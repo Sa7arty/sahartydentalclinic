@@ -150,7 +150,7 @@ async function fetchAllRows<T>(buildQuery: () => any): Promise<T[]> {
 }
 
 export default function Balance() {
-  const { session } = useAuth()
+  const { session, isDentist, can } = useAuth()
   const { settings } = useSettings()
   const [tab, setTab] = useState<SideTab>('cashflow')
   const [period, setPeriod] = useState<Period>('this_month')
@@ -298,6 +298,7 @@ export default function Balance() {
 
   async function handleAddExpense(e: FormEvent<HTMLFormElement>) {
     e.preventDefault()
+    if (!isDentist && !can('clinic_finances', 'edit')) return
     const form = new FormData(e.currentTarget)
     const occurredAt = form.get('occurred_at')
     const occurred = occurredAt ? new Date(occurredAt as string) : new Date()
@@ -358,6 +359,7 @@ export default function Balance() {
   }
 
   async function handleStopRecurring(id: string) {
+    if (!isDentist && !can('clinic_finances', 'edit')) return
     if (!(await confirmDialog('Stop this recurring expense? Already-recorded expenses stay; no new ones will be created.'))) return
     const { error } = await supabase.from('recurring_expenses').update({ active: false }).eq('id', id)
     if (error) alert(error.message)
@@ -366,6 +368,7 @@ export default function Balance() {
 
   async function handleSaveExpenseEdit(e: FormEvent<HTMLFormElement>, expense: ExpenseRow) {
     e.preventDefault()
+    if (!isDentist && !can('clinic_finances', 'edit')) return
     const form = new FormData(e.currentTarget)
     const occurredAt = form.get('occurred_at')
     const { error } = await supabase
@@ -388,6 +391,7 @@ export default function Balance() {
   }
 
   async function handleDeleteExpense(id: string) {
+    if (!isDentist && !can('clinic_finances', 'delete')) return
     if (!(await confirmDialog('Delete this expense? This cannot be undone.'))) return
     const { error } = await supabase.from('expenses').delete().eq('id', id)
     if (error) alert(error.message)
@@ -396,6 +400,7 @@ export default function Balance() {
 
   async function handleSaveMiscEdit(e: FormEvent<HTMLFormElement>, m: MiscIncome) {
     e.preventDefault()
+    if (!isDentist && !can('misc_income', 'edit')) return
     const form = new FormData(e.currentTarget)
     const occurredAt = form.get('occurred_at')
     const { error } = await supabase
@@ -415,6 +420,7 @@ export default function Balance() {
   }
 
   async function handleDeleteMisc(id: string) {
+    if (!isDentist && !can('misc_income', 'delete')) return
     if (!(await confirmDialog('Delete this income entry? This cannot be undone.\n\nNote: if it came from a staff loan repayment and that loan still exists in HR, undo it from HR → Deductions instead so the loan balance stays correct.'))) return
     const { error } = await supabase.from('misc_income').delete().eq('id', id)
     if (error) alert(error.message)

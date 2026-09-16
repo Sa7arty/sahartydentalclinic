@@ -24,11 +24,12 @@ import { WORLD_COUNTRIES } from '../data/countries'
 import { WEEKDAY_NAMES_FROM } from '../lib/dates'
 import { exportPatientsCsv, downloadPatientImportTemplate, importPatientsFromCsv } from '../lib/csv'
 import { invalidateLetterheadCache } from '../lib/pdf'
+import SecurityTab from '../components/SecurityTab'
 
 const DURATION_OPTIONS = [15, 20, 30, 45, 60, 75, 90, 120, 180, 240, 300]
 const WEEKDAY_FULL_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
 
-type Category = 'patients' | 'calendar' | 'procedures' | 'price-list' | 'financial' | 'attendance' | 'templates' | 'backup' | 'errors'
+type Category = 'patients' | 'calendar' | 'procedures' | 'price-list' | 'financial' | 'attendance' | 'templates' | 'security' | 'backup' | 'errors'
 
 const CATEGORIES: { key: Category; label: string }[] = [
   { key: 'patients', label: 'Patients' },
@@ -38,6 +39,7 @@ const CATEGORIES: { key: Category; label: string }[] = [
   { key: 'financial', label: 'Financial' },
   { key: 'attendance', label: 'Attendance' },
   { key: 'templates', label: 'Templates' },
+  { key: 'security', label: 'Security' },
   { key: 'backup', label: 'Backup & import' },
   { key: 'errors', label: 'Error log' },
 ]
@@ -531,7 +533,7 @@ export default function Settings() {
       <h1 className="text-2xl font-semibold text-navy-900">Settings</h1>
 
       <div className="flex gap-1 overflow-x-auto border-b border-slate-200">
-        {CATEGORIES.map((c) => (
+        {CATEGORIES.filter((c) => c.key !== 'security' || isDentist).map((c) => (
           <button
             key={c.key}
             onClick={() => setCategory(c.key)}
@@ -1492,6 +1494,8 @@ export default function Settings() {
         </div>
       )}
 
+
+      {category === 'security' && isDentist && <SecurityTab />}
 
       {category === 'backup' && (
         <div className={card}>

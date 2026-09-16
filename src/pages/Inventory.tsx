@@ -20,7 +20,7 @@ type View = 'count' | 'order'
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 
 export default function Inventory() {
-  const { session, isDentist } = useAuth()
+  const { session, isDentist, can } = useAuth()
   const [inventories, setInventories] = useState<InventoryType[]>([])
   const [inventoryId, setInventoryId] = useState('')
   const [clusters, setClusters] = useState<InventoryCluster[]>([])
@@ -40,7 +40,7 @@ export default function Inventory() {
   // A closed month: past edits must not change what it shows, so its item/category
   // management controls are read-only — editing always affects the live (current+future) data.
   const isPastMonth = month < new Date().toISOString().slice(0, 7)
-  const canManage = isDentist && !isPastMonth
+  const canManage = (isDentist || can('inventory', 'edit') || can('inventory', 'delete')) && !isPastMonth
 
   useEffect(() => {
     supabase
@@ -174,6 +174,7 @@ export default function Inventory() {
   }
 
   async function handleDeleteItem(id: string) {
+    if (!isDentist && !can('inventory', 'delete')) return
     if (!(await confirmDialog('Delete this item and its count history?'))) return
     const { error } = await supabase.from('inventory_items').delete().eq('id', id)
     if (error) alert(error.message)
@@ -228,6 +229,7 @@ export default function Inventory() {
   }
 
   async function handleDeleteCluster(id: string) {
+    if (!isDentist && !can('inventory', 'delete')) return
     if (!(await confirmDialog('Delete this storage location and all its items?'))) return
     const { error } = await supabase.from('inventory_clusters').delete().eq('id', id)
     if (error) alert(error.message)

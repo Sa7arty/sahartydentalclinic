@@ -4,8 +4,10 @@ import { supabase } from '../lib/supabase'
 import { Patient, Location, Provider, PatientGroup, patientFullName, calculateAge, formatDobAge, providerFullName, missingRequiredPatientFields } from '../types'
 import { formatDate } from '../lib/dates'
 import { useSettings } from '../context/SettingsContext'
+import { useAuth } from '../context/AuthContext'
 import PatientForm from '../components/PatientForm'
 import PatientBadges from '../components/PatientBadges'
+import Can from '../components/Can'
 
 type SortKey = 'name' | 'file_number' | 'created_at' | 'age' | 'gender' | 'provider' | 'group'
 
@@ -21,6 +23,7 @@ const SORT_OPTIONS: { key: SortKey; label: string }[] = [
 
 export default function PatientsList() {
   const { settings } = useSettings()
+  const { isDentist, can } = useAuth()
   const [patients, setPatients] = useState<Patient[]>([])
   const [locations, setLocations] = useState<Location[]>([])
   const [providers, setProviders] = useState<Provider[]>([])
@@ -98,6 +101,7 @@ export default function PatientsList() {
   }
 
   async function handleCreate(payload: Record<string, unknown>) {
+    if (!isDentist && !can('patients', 'edit')) return
     const { error } = await supabase.from('patients').insert(payload)
     if (!error) {
       setShowNewForm(false)
@@ -132,6 +136,7 @@ export default function PatientsList() {
   })
 
   async function applyBulk() {
+    if (!isDentist && !can('patients', 'edit')) return
     if (selected.size === 0 || (!bulkProvider && !bulkGroup)) return
     setApplyingBulk(true)
     const patch: Record<string, string> = {}
@@ -203,12 +208,14 @@ export default function PatientsList() {
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-2xl font-semibold text-navy-900">Patients</h1>
-        <button
-          onClick={() => setShowNewForm((s) => !s)}
-          className="rounded-lg bg-navy-900 px-4 py-2 text-sm font-medium text-white hover:bg-navy-800"
-        >
-          {showNewForm ? 'Cancel' : '+ New patient'}
-        </button>
+        <Can resource="patients" action="edit">
+          <button
+            onClick={() => setShowNewForm((s) => !s)}
+            className="rounded-lg bg-navy-900 px-4 py-2 text-sm font-medium text-white hover:bg-navy-800"
+          >
+            {showNewForm ? 'Cancel' : '+ New patient'}
+          </button>
+        </Can>
       </div>
 
       {showNewForm && (
