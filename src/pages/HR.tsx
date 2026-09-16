@@ -173,6 +173,7 @@ function EmployeesTab({
   const [editingProviderId, setEditingProviderId] = useState<string | null>(null)
   const [accessOpenFor, setAccessOpenFor] = useState<string | null>(null)
   const [roleByUserId, setRoleByUserId] = useState<Record<string, string>>({})
+  const [admins, setAdmins] = useState<{ user_id: string; full_name: string | null; email: string | null }[]>([])
 
   useEffect(() => {
     const userIds = employees.map((e) => e.user_id).filter((id): id is string => !!id)
@@ -185,9 +186,26 @@ function EmployeesTab({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [employees])
 
-  // The owner/admin account(s) — anyone holding the dentist role — get their
-  // own section at the top instead of blending into the general staff list.
-  const administrators = employees.filter((e) => e.user_id && roleByUserId[e.user_id] === 'dentist')
+  // The owner/admin account is driven by the dentist role on the login
+  // itself, not by having an employees row — the owner explicitly doesn't
+  // want their own admin login treated as a payroll employee. If they ever
+  // want themselves tracked as staff too, that's a separate employee record
+  // under Staff below, not this one.
+  useEffect(() => {
+    loadAdmins()
+  }, [])
+
+  async function loadAdmins() {
+    const { data: roleRows } = await supabase.from('user_roles').select('user_id').eq('role', 'dentist')
+    const userIds = (roleRows ?? []).map((r) => r.user_id as string)
+    if (userIds.length === 0) return setAdmins([])
+    const { data: profileRows } = await supabase.from('profiles').select('id, full_name, email').in('id', userIds)
+    setAdmins(((profileRows as { id: string; full_name: string | null; email: string | null }[]) ?? []).map((p) => ({ user_id: p.id, full_name: p.full_name, email: p.email })))
+  }
+
+  // Any employees row that happens to belong to a dentist-role login (e.g.
+  // left over from before) is still excluded from the staff list — it's
+  // covered by the Administrator card above instead.
   const staff = employees.filter((e) => !(e.user_id && roleByUserId[e.user_id] === 'dentist'))
 
   async function handleSave(payload: Record<string, unknown>, file: File | null, id?: string) {
@@ -238,7 +256,7 @@ function EmployeesTab({
     else onProvidersChanged()
   }
 
-  function renderEmployeeRow(e: Employee, allowDelete: boolean) {
+  function renderEmployeeRow(e: Employee) {
     return editingId === e.id ? (
       <div key={e.id} className="py-3">
         <EmployeeForm employee={e} settings={settings} onSave={(p, f) => handleSave(p, f, e.id)} onCancel={() => setEditingId(null)} />
@@ -280,13 +298,11 @@ function EmployeesTab({
                 Edit
               </button>
             </Can>
-            {allowDelete && (
-              <Can resource="employees" action="delete">
-                <button onClick={() => handleDelete(e.id)} className="text-sm text-red-600 hover:underline">
-                  Delete
-                </button>
-              </Can>
-            )}
+            <Can resource="employees" action="delete">
+              <button onClick={() => handleDelete(e.id)} className="text-sm text-red-600 hover:underline">
+                Delete
+              </button>
+            </Can>
           </div>
         </div>
         {accessOpenFor === e.id && (
@@ -310,11 +326,25 @@ function EmployeesTab({
       <div className={card}>
         <div>
           <h2 className="font-medium text-navy-900">Administrator</h2>
-          <p className="text-sm text-slate-500">The owner account — full access to everything. Can be edited but never deleted.</p>
+          <p className="text-sm text-slate-500">The owner login — full access to everything, and not a payroll employee. Want yourself tracked as staff too? Add a separate account under Staff below.</p>
         </div>
         <div className="divide-y divide-slate-100">
-          {administrators.length === 0 && <p className="py-2 text-sm text-slate-500">No administrator account found.</p>}
-          {administrators.map((e) => renderEmployeeRow(e, false))}
+          {admins.length === 0 && <p className="py-2 text-sm text-slate-500">No administrator account found.</p>}
+          {admins.map((a) => (
+            <div key={a.user_id} className="py-3">
+              <div className="flex items-center justify-between gap-3">
+                <p className="font-medium text-navy-900">{a.full_name || a.email || 'Administrator'}</p>
+                <Can resource="staff_logins" action="view">
+                  <button onClick={() => setAccessOpenFor(accessOpenFor === a.user_id ? null : a.user_id)} className="text-sm font-medium text-navy-700 hover:underline">
+                    {accessOpenFor === a.user_id ? 'Hide login & access' : 'Login & access'}
+                  </button>
+                </Can>
+              </div>
+              {accessOpenFor === a.user_id && (
+                <LoginAccessPanel personName={a.full_name || 'Administrator'} personEmail={a.email} userId={a.user_id} defaultRole="dentist" onLinked={() => {}} />
+              )}
+            </div>
+          ))}
         </div>
       </div>
 
@@ -341,7 +371,7 @@ function EmployeesTab({
 
         <div className="divide-y divide-slate-100">
           {staff.length === 0 && !showAdd && <p className="py-2 text-sm text-slate-500">No employees yet — add one above.</p>}
-          {staff.map((e) => renderEmployeeRow(e, true))}
+          {staff.map((e) => renderEmployeeRow(e))}
         </div>
       </div>
 
