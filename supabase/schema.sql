@@ -1373,3 +1373,91 @@ create policy "dentist deletes clinic assets" on storage.objects for delete
 -- the pre-existing weekly_off_day (still used for payroll) — deliberately
 -- not merged into this, to avoid touching payroll calculations.
 alter table public.app_settings add column if not exists business_hours jsonb not null default '{}'::jsonb;
+
+-- Audit log (2026-09-16): Settings > Audit log (dentist-only). Backed by
+-- database triggers, not app code — audit_log_row() is attached to every
+-- real business table (patients, visits, prescriptions, expenses, employees,
+-- inventory, etc; deliberately NOT lookup/reference tables like
+-- procedure_categories, or already-history tables like
+-- inventory_item_history) and fires on insert/update/delete automatically,
+-- so it covers every current and future write with zero app-code
+-- instrumentation. See src/components/AuditLogTab.tsx for the viewer.
+create table public.audit_log (
+  id uuid primary key default gen_random_uuid(),
+  created_at timestamptz not null default now(),
+  actor_id uuid references auth.users(id) on delete set null,
+  table_name text not null,
+  record_id uuid,
+  action text not null,
+  old_data jsonb,
+  new_data jsonb
+);
+create index audit_log_created_at_idx on public.audit_log (created_at desc);
+create index audit_log_table_record_idx on public.audit_log (table_name, record_id);
+alter table public.audit_log enable row level security;
+create policy "dentist views audit log" on public.audit_log for select
+  using (public.has_role(auth.uid(), 'dentist'));
+
+create or replace function public.audit_log_row()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  insert into public.audit_log (actor_id, table_name, record_id, action, old_data, new_data)
+  values (
+    auth.uid(), TG_TABLE_NAME,
+    (case when TG_OP = 'DELETE' then old.id else new.id end),
+    lower(TG_OP),
+    case when TG_OP in ('UPDATE','DELETE') then to_jsonb(old) else null end,
+    case when TG_OP in ('INSERT','UPDATE') then to_jsonb(new) else null end
+  );
+  return coalesce(new, old);
+end; $$;
+
+create trigger audit_patients after insert or update or delete on public.patients for each row execute function public.audit_log_row();
+create trigger audit_visits after insert or update or delete on public.visits for each row execute function public.audit_log_row();
+create trigger audit_clinical_records after insert or update or delete on public.clinical_records for each row execute function public.audit_log_row();
+create trigger audit_patient_photos after insert or update or delete on public.patient_photos for each row execute function public.audit_log_row();
+create trigger audit_ledger_entries after insert or update or delete on public.ledger_entries for each row execute function public.audit_log_row();
+create trigger audit_expenses after insert or update or delete on public.expenses for each row execute function public.audit_log_row();
+create trigger audit_patient_conditions after insert or update or delete on public.patient_conditions for each row execute function public.audit_log_row();
+create trigger audit_patient_medications after insert or update or delete on public.patient_medications for each row execute function public.audit_log_row();
+create trigger audit_patient_allergies after insert or update or delete on public.patient_allergies for each row execute function public.audit_log_row();
+create trigger audit_tooth_records after insert or update or delete on public.tooth_records for each row execute function public.audit_log_row();
+create trigger audit_recurring_expenses after insert or update or delete on public.recurring_expenses for each row execute function public.audit_log_row();
+create trigger audit_prescriptions after insert or update or delete on public.prescriptions for each row execute function public.audit_log_row();
+create trigger audit_patient_letters after insert or update or delete on public.patient_letters for each row execute function public.audit_log_row();
+create trigger audit_employees after insert or update or delete on public.employees for each row execute function public.audit_log_row();
+create trigger audit_employee_attendance after insert or update or delete on public.employee_attendance for each row execute function public.audit_log_row();
+create trigger audit_employee_deductions after insert or update or delete on public.employee_deductions for each row execute function public.audit_log_row();
+create trigger audit_deduction_payments after insert or update or delete on public.deduction_payments for each row execute function public.audit_log_row();
+create trigger audit_misc_income after insert or update or delete on public.misc_income for each row execute function public.audit_log_row();
+create trigger audit_payroll_runs after insert or update or delete on public.payroll_runs for each row execute function public.audit_log_row();
+create trigger audit_payslips after insert or update or delete on public.payslips for each row execute function public.audit_log_row();
+create trigger audit_employee_leave after insert or update or delete on public.employee_leave for each row execute function public.audit_log_row();
+create trigger audit_inventory_items after insert or update or delete on public.inventory_items for each row execute function public.audit_log_row();
+create trigger audit_inventory_counts after insert or update or delete on public.inventory_counts for each row execute function public.audit_log_row();
+
+-- WhatsApp appointment reminders (2026-09-16): Settings > Reminders. A
+-- pg_cron job ("send-whatsapp-reminders-every-30-min") calls the
+-- send-whatsapp-reminders edge function every 30 minutes via pg_net; the
+-- function itself checks the current Cairo hour against
+-- app_settings.whatsapp_reminder_settings.send_hour and no-ops otherwise, so
+-- the owner can change the send hour in Settings without a new migration.
+-- Requires two edge function secrets the owner supplies from their own Meta
+-- WhatsApp Business account: WHATSAPP_ACCESS_TOKEN, WHATSAPP_PHONE_NUMBER_ID
+-- — the function no-ops gracefully (reason: 'not_configured') until both are
+-- set, same pattern as GOOGLE_SERVICE_ACCOUNT_KEY for Calendar sync.
+-- reminder_sent_at is the idempotency guard: each visit is only ever
+-- reminded once, so the every-30-min cron can never double-send.
+alter table public.visits add column if not exists reminder_sent_at timestamptz;
+alter table public.app_settings add column if not exists whatsapp_reminder_settings jsonb not null default '{"enabled": false, "send_hour": 18, "template_name": "appointment_reminder", "template_lang": "en_US"}'::jsonb;
+
+create extension if not exists pg_cron;
+create extension if not exists pg_net;
+-- Registered via: select cron.schedule('send-whatsapp-reminders-every-30-min', '*/30 * * * *', $$ select net.http_post(url := '<project>/functions/v1/send-whatsapp-reminders', headers := jsonb_build_object('Content-Type','application/json','Authorization','Bearer <anon key>'), body := '{}'::jsonb); $$);
+-- Uses the anon key (not the service-role key) as the invoking request's
+-- bearer token purely to satisfy the edge function's verify_jwt gate — the
+-- anon key is already public (shipped in the frontend bundle) so this adds
+-- no exposure. The function's own Supabase client inside index.ts still uses
+-- SUPABASE_SERVICE_ROLE_KEY (auto-injected into every edge function's
+-- environment regardless of how the function was invoked) for its actual
+-- privileged reads/writes.

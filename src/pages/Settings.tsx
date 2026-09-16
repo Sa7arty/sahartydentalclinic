@@ -19,17 +19,19 @@ import {
   PaperSize,
   BusinessHours,
   DEFAULT_DAY_HOURS,
+  WhatsAppReminderSettings,
 } from '../types'
 import { WORLD_COUNTRIES } from '../data/countries'
 import { WEEKDAY_NAMES_FROM } from '../lib/dates'
 import { exportPatientsCsv, downloadPatientImportTemplate, importPatientsFromCsv } from '../lib/csv'
 import { invalidateLetterheadCache } from '../lib/pdf'
 import SecurityTab from '../components/SecurityTab'
+import AuditLogTab from '../components/AuditLogTab'
 
 const DURATION_OPTIONS = [15, 20, 30, 45, 60, 75, 90, 120, 180, 240, 300]
 const WEEKDAY_FULL_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
 
-type Category = 'patients' | 'calendar' | 'procedures' | 'price-list' | 'financial' | 'attendance' | 'templates' | 'security' | 'backup' | 'errors'
+type Category = 'patients' | 'calendar' | 'procedures' | 'price-list' | 'financial' | 'attendance' | 'templates' | 'reminders' | 'security' | 'audit' | 'backup' | 'errors'
 
 const CATEGORIES: { key: Category; label: string }[] = [
   { key: 'patients', label: 'Patients' },
@@ -39,7 +41,9 @@ const CATEGORIES: { key: Category; label: string }[] = [
   { key: 'financial', label: 'Financial' },
   { key: 'attendance', label: 'Attendance' },
   { key: 'templates', label: 'Templates' },
+  { key: 'reminders', label: 'Reminders' },
   { key: 'security', label: 'Security' },
+  { key: 'audit', label: 'Audit log' },
   { key: 'backup', label: 'Backup & import' },
   { key: 'errors', label: 'Error log' },
 ]
@@ -77,6 +81,9 @@ export default function Settings() {
   const [visitProviderRequired, setVisitProviderRequired] = useState(settings.visit_provider_required)
   const [businessHours, setBusinessHours] = useState<BusinessHours>(settings.business_hours)
   const [savingCalendar, setSavingCalendar] = useState(false)
+
+  const [reminderSettings, setReminderSettings] = useState<WhatsAppReminderSettings>(settings.whatsapp_reminder_settings)
+  const [savingReminders, setSavingReminders] = useState(false)
 
   const [groups, setGroups] = useState<PatientGroup[]>([])
   const [newGroupName, setNewGroupName] = useState('')
@@ -157,6 +164,7 @@ export default function Settings() {
     setClinicLat(settings.clinic_latitude)
     setClinicLng(settings.clinic_longitude)
     setAttendanceRadius(settings.attendance_radius_meters)
+    setReminderSettings(settings.whatsapp_reminder_settings)
   }, [settings])
 
   useEffect(() => {
@@ -480,6 +488,14 @@ export default function Settings() {
     if (error) alert(error.message)
     else await refresh()
   }
+  async function handleSaveReminders(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault()
+    setSavingReminders(true)
+    const { error } = await supabase.from('app_settings').update({ whatsapp_reminder_settings: reminderSettings }).eq('id', true)
+    setSavingReminders(false)
+    if (error) alert(error.message)
+    else await refresh()
+  }
   async function handleSetCounter(e: FormEvent<HTMLFormElement>) {
     e.preventDefault()
     const n = Number(counterValue)
@@ -533,7 +549,7 @@ export default function Settings() {
       <h1 className="text-2xl font-semibold text-navy-900">Settings</h1>
 
       <div className="flex gap-1 overflow-x-auto border-b border-slate-200">
-        {CATEGORIES.filter((c) => c.key !== 'security' || isDentist).map((c) => (
+        {CATEGORIES.filter((c) => (c.key !== 'security' && c.key !== 'audit') || isDentist).map((c) => (
           <button
             key={c.key}
             onClick={() => setCategory(c.key)}
@@ -1495,7 +1511,69 @@ export default function Settings() {
       )}
 
 
+      {category === 'reminders' && (
+        <form onSubmit={handleSaveReminders} className={card}>
+          <div>
+            <h2 className="font-medium text-navy-900">WhatsApp appointment reminders</h2>
+            <p className="text-sm text-slate-500">
+              Sends an automatic WhatsApp reminder to each patient the day before their appointment. Needs a WhatsApp Business account connected first — ask
+              me for the setup guide if you haven't done that yet.
+            </p>
+          </div>
+
+          <label className="flex items-center gap-2 text-sm text-navy-800">
+            <input type="checkbox" checked={reminderSettings.enabled} onChange={(e) => setReminderSettings((s) => ({ ...s, enabled: e.target.checked }))} />
+            Send reminders automatically
+          </label>
+
+          <div>
+            <label className="mb-1 block text-sm text-slate-500">Send at (clinic time)</label>
+            <select
+              value={reminderSettings.send_hour}
+              onChange={(e) => setReminderSettings((s) => ({ ...s, send_hour: Number(e.target.value) }))}
+              className="rounded-lg border border-slate-300 px-3 py-2"
+            >
+              {Array.from({ length: 24 }, (_, h) => (
+                <option key={h} value={h}>
+                  {h === 0 ? '12:00 AM' : h < 12 ? `${h}:00 AM` : h === 12 ? '12:00 PM' : `${h - 12}:00 PM`}
+                </option>
+              ))}
+            </select>
+            <p className="mt-1 text-xs text-slate-400">The day before each appointment, at this time — e.g. 6:00 PM sends tonight's reminder for tomorrow's visits.</p>
+          </div>
+
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div>
+              <label className="mb-1 block text-sm text-slate-500">Approved template name</label>
+              <input
+                value={reminderSettings.template_name}
+                onChange={(e) => setReminderSettings((s) => ({ ...s, template_name: e.target.value }))}
+                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-sm text-slate-500">Template language code</label>
+              <input
+                value={reminderSettings.template_lang}
+                onChange={(e) => setReminderSettings((s) => ({ ...s, template_lang: e.target.value }))}
+                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+              />
+            </div>
+          </div>
+          <p className="text-xs text-slate-400">
+            These must exactly match the message template WhatsApp has already approved for your business — this isn't free text, it's whichever wording
+            you submitted and got approved. Changing the wording itself means submitting a new template to WhatsApp, not editing it here.
+          </p>
+
+          <button type="submit" disabled={savingReminders} className="rounded-lg bg-navy-900 px-4 py-2 text-sm font-medium text-white hover:bg-navy-800 disabled:opacity-50">
+            {savingReminders ? 'Saving…' : 'Save'}
+          </button>
+        </form>
+      )}
+
       {category === 'security' && isDentist && <SecurityTab />}
+
+      {category === 'audit' && isDentist && <AuditLogTab />}
 
       {category === 'backup' && (
         <div className={card}>

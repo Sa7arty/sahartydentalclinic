@@ -281,6 +281,30 @@ export interface AppSettings {
   attendance_radius_meters: number
   letterhead_settings: LetterheadSettings
   business_hours: BusinessHours
+  whatsapp_reminder_settings: WhatsAppReminderSettings
+}
+
+/** Settings → Reminders. `send_hour` is the clinic's local (Cairo) hour of day,
+ * checked by the send-whatsapp-reminders edge function on its cron run — see
+ * supabase/functions/send-whatsapp-reminders. The template name/language must
+ * match whatever message template was actually approved with WhatsApp; this
+ * app can't change the approved wording itself, only which approved one to use. */
+export interface WhatsAppReminderSettings {
+  enabled: boolean
+  send_hour: number
+  template_name: string
+  template_lang: string
+}
+
+export const DEFAULT_WHATSAPP_REMINDER_SETTINGS: WhatsAppReminderSettings = {
+  enabled: false,
+  send_hour: 18,
+  template_name: 'appointment_reminder',
+  template_lang: 'en_US',
+}
+
+export function mergeWhatsAppReminderSettings(partial: Partial<WhatsAppReminderSettings> | null | undefined): WhatsAppReminderSettings {
+  return { ...DEFAULT_WHATSAPP_REMINDER_SETTINGS, ...partial }
 }
 
 /** One weekday's opening hours — "closed" means the clinic isn't open at all that day. */
