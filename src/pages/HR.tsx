@@ -947,7 +947,7 @@ function AttendanceTab({ employees, settings }: { employees: Employee[]; setting
   const [employeeId, setEmployeeId] = useState(employees[0]?.id ?? '')
   const [month, setMonth] = useState(() => toYmd(new Date()).slice(0, 7)) // yyyy-mm
   const [rows, setRows] = useState<EmployeeAttendance[]>([])
-  const [leaveDates, setLeaveDates] = useState<Set<string>>(new Set())
+  const [leaveByDate, setLeaveByDate] = useState<Map<string, EmployeeLeave>>(new Map())
   const [editing, setEditing] = useState<EmployeeAttendance | null>(null)
 
   const employee = employees.find((e) => e.id === employeeId)
@@ -965,9 +965,9 @@ function AttendanceTab({ employees, settings }: { employees: Employee[]; setting
       supabase.from('employee_leave').select('*').eq('employee_id', employeeId).eq('status', 'approved'),
     ])
     setRows((data as EmployeeAttendance[]) ?? [])
-    const s = new Set<string>()
-    for (const l of (lv as EmployeeLeave[]) ?? []) for (const d of eachDateInclusive(l.start_date, l.end_date)) s.add(d)
-    setLeaveDates(s)
+    const m = new Map<string, EmployeeLeave>()
+    for (const l of (lv as EmployeeLeave[]) ?? []) for (const d of eachDateInclusive(l.start_date, l.end_date)) m.set(d, l)
+    setLeaveByDate(m)
   }
 
   const isLate = (r: EmployeeAttendance): boolean => (employee ? isLateRow(employee, r, settings) : false)
@@ -1008,10 +1008,11 @@ function AttendanceTab({ employees, settings }: { employees: Employee[]; setting
   }, 0)
   const lateDays = rows.filter(isLate).length
   // No-shows: working days already passed with no attendance and no approved leave.
-  const attendedSet = new Set(rows.map((r) => r.work_date))
+  const rowsByDate = useMemo(() => new Map(rows.map((r) => [r.work_date, r])), [rows])
   const todayYmd = toYmd(new Date())
-  const absences = eachDateInclusive(toYmd(period.start), toYmd(period.end)).filter(
-    (d) => d <= todayYmd && !isWeeklyOffDate(d, settings.weekly_off_day) && !attendedSet.has(d) && !leaveDates.has(d),
+  const allDates = useMemo(() => eachDateInclusive(toYmd(period.start), toYmd(period.end)), [period])
+  const absences = allDates.filter(
+    (d) => d <= todayYmd && !isWeeklyOffDate(d, settings.weekly_off_day) && !rowsByDate.has(d) && !leaveByDate.has(d),
   ).length
 
   return (
@@ -1083,40 +1084,82 @@ function AttendanceTab({ employees, settings }: { employees: Employee[]; setting
                 </tr>
               </thead>
               <tbody>
-                {rows.length === 0 && (
-                  <tr>
-                    <td colSpan={7} className="px-3 py-3 text-slate-500">
-                      No attendance recorded for this period.
-                    </td>
-                  </tr>
-                )}
-                {rows.map((r) => {
-                  const h = attendanceHours(r)
-                  const o = overtimeForDay(r, rules)
-                  const ot = o.otBeforeMidnight + o.otAfterMidnight
+                {allDates.map((d) => {
+                  const r = rowsByDate.get(d)
+                  const weekday = new Date(`${d}T00:00:00`).toLocaleDateString('en', { weekday: 'short' })
+                  const isOff = isWeeklyOffDate(d, settings.weekly_off_day)
+                  const leave = leaveByDate.get(d)
+                  const isFuture = d > todayYmd
+
+                  // An actual attendance record always wins — e.g. someone who
+                  // worked on their weekly-off day still shows their real hours,
+                  // just with a small badge noting it was their day off.
+                  if (r) {
+                    const h = attendanceHours(r)
+                    const o = overtimeForDay(r, rules)
+                    const ot = o.otBeforeMidnight + o.otAfterMidnight
+                    return (
+                      <tr key={d} className="border-t border-slate-100">
+                        <td className="px-3 py-2 text-slate-500">{weekday}</td>
+                        <td className="px-3 py-2">
+                          {formatDate(d)}
+                          {isOff && <span className="ml-1 rounded bg-slate-100 px-1 text-[10px] text-slate-500">worked on day off</span>}
+                        </td>
+                        <td className="px-3 py-2">
+                          {r.check_in?.slice(0, 5) ?? '—'}
+                          {isLate(r) && <span className="ml-1 rounded-full bg-red-100 px-1.5 py-0.5 text-[10px] font-semibold text-red-700">Late</span>}
+                        </td>
+                        <td className="px-3 py-2">{r.check_out?.slice(0, 5) ?? '—'}</td>
+                        <td className="px-3 py-2">{h.toFixed(1)}</td>
+                        <td className="px-3 py-2">{ot > 0 ? ot.toFixed(1) : '—'}</td>
+                        <td className="px-3 py-2 text-right">
+                          <button onClick={() => setEditing(r)} className="mr-3 text-xs font-medium text-navy-700 hover:underline">
+                            Edit
+                          </button>
+                          <button onClick={() => handleDelete(r.id)} className="text-xs text-red-600 hover:underline">
+                            Delete
+                          </button>
+                        </td>
+                      </tr>
+                    )
+                  }
+
+                  // No attendance record for this date — say why, in order of
+                  // certainty: their weekly day off, an approved leave on file,
+                  // a day that hasn't happened yet, or — the one that actually
+                  // needs the owner's attention — absent with nothing on record.
+                  let status: string
+                  let statusCls: string
+                  if (isOff) {
+                    status = 'Weekly Off'
+                    statusCls = 'text-slate-500'
+                  } else if (leave) {
+                    status = LEAVE_TYPE_LABELS[leave.leave_type] + (leave.note ? ` — ${leave.note}` : '')
+                    statusCls = 'text-navy-700'
+                  } else if (isFuture) {
+                    status = '—'
+                    statusCls = 'text-slate-400'
+                  } else {
+                    status = 'Absent without excuse'
+                    statusCls = 'font-medium text-red-600'
+                  }
+
                   return (
-                    <tr key={r.id} className="border-t border-slate-100">
-                      <td className="px-3 py-2 text-slate-500">{new Date(`${r.work_date}T00:00:00`).toLocaleDateString('en', { weekday: 'short' })}</td>
-                      <td className="px-3 py-2">
-                        {formatDate(r.work_date)}
-                        {isWeeklyOffDate(r.work_date, settings.weekly_off_day) && (
-                          <span className="ml-1 rounded bg-slate-100 px-1 text-[10px] text-slate-500">day off</span>
-                        )}
+                    <tr key={d} className="border-t border-slate-100">
+                      <td className="px-3 py-2 text-slate-500">{weekday}</td>
+                      <td className="px-3 py-2">{formatDate(d)}</td>
+                      <td colSpan={4} className={`px-3 py-2 ${statusCls}`}>
+                        {status}
                       </td>
-                      <td className="px-3 py-2">
-                        {r.check_in?.slice(0, 5) ?? '—'}
-                        {isLate(r) && <span className="ml-1 rounded-full bg-red-100 px-1.5 py-0.5 text-[10px] font-semibold text-red-700">Late</span>}
-                      </td>
-                      <td className="px-3 py-2">{r.check_out?.slice(0, 5) ?? '—'}</td>
-                      <td className="px-3 py-2">{h.toFixed(1)}</td>
-                      <td className="px-3 py-2">{ot > 0 ? ot.toFixed(1) : '—'}</td>
                       <td className="px-3 py-2 text-right">
-                        <button onClick={() => setEditing(r)} className="mr-3 text-xs font-medium text-navy-700 hover:underline">
-                          Edit
-                        </button>
-                        <button onClick={() => handleDelete(r.id)} className="text-xs text-red-600 hover:underline">
-                          Delete
-                        </button>
+                        {!isFuture && (
+                          <button
+                            onClick={() => setEditing({ id: '', employee_id: employeeId, work_date: d, check_in: null, check_out: null, note: null, created_at: '' })}
+                            className="text-xs font-medium text-navy-700 hover:underline"
+                          >
+                            Add
+                          </button>
+                        )}
                       </td>
                     </tr>
                   )
