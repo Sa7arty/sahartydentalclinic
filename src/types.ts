@@ -955,7 +955,6 @@ export interface Employee {
   base_salary: number
   overtime_hourly_rate: number
   standard_daily_hours: number
-  expected_work_days: number
   annual_leave_days: number
   active: boolean
   created_at: string

@@ -789,7 +789,6 @@ function EmployeeForm({
         base_salary: Number(f.get('base_salary')) || 0,
         overtime_hourly_rate: Number(f.get('overtime_hourly_rate')) || 0,
         standard_daily_hours: standard,
-        expected_work_days: Number(f.get('expected_work_days')) || 26,
         annual_leave_days: Number(f.get('annual_leave_days')) || 0,
         active: f.get('active') === 'on',
       },
@@ -909,11 +908,6 @@ function EmployeeForm({
               <p className="mt-0.5 text-[11px] text-slate-400">They can check in/out anytime; only total hours matter. Overtime = hours worked beyond this per day (no early-arrival bonus).</p>
             </div>
           )}
-        </div>
-        <div>
-          <label className="mb-1 block text-xs text-slate-500">Expected work days / month</label>
-          <input name="expected_work_days" type="number" min="1" max="31" defaultValue={employee?.expected_work_days ?? 26} className={input} />
-          <p className="mt-0.5 text-[11px] text-slate-400">Base ÷ this = one day's pay, used to pro-rate for absences.</p>
         </div>
         <div>
           <label className="mb-1 block text-xs text-slate-500">Paid leave days / year</label>
@@ -1191,6 +1185,14 @@ function Stat({ label, value }: { label: string; value: string }) {
  * Days are counted chronologically within each calendar year; the first `annualLeaveDays`
  * allowance-eligible days are paid, the rest are unpaid.
  */
+/** How many of this date range's calendar days are actual working days — every
+ * day except the weekly off day. Replaces the old fixed "expected work days"
+ * setting, which didn't match how many Fridays actually fall in a given
+ * period (25, 26, or 27 depending where the period lands in the calendar). */
+function workingDaysInRange(startYmd: string, endYmd: string, weeklyOffDay: number): number {
+  return eachDateInclusive(startYmd, endYmd).filter((d) => !isWeeklyOffDate(d, weeklyOffDay)).length
+}
+
 /** Overtime rules for an employee (fixed shift vs flexible hours) using the current settings. */
 function otRules(emp: Employee, settings: AppSettings) {
   return {
@@ -1272,10 +1274,13 @@ function buildPayslip(
     else unpaidLeaveDays++
   }
 
-  const perDayValue = emp.expected_work_days > 0 ? Number(emp.base_salary) / emp.expected_work_days : 0
-  const paidDays = Math.min(attendedDays + paidLeaveDays, emp.expected_work_days)
+  // Every calendar day except Fridays in THIS period — not a fixed monthly
+  // assumption, so it naturally comes out to 25/26/27 depending on the period.
+  const expectedWorkingDays = workingDaysInRange(curStart, curEnd, settings.weekly_off_day)
+  const perDayValue = expectedWorkingDays > 0 ? Number(emp.base_salary) / expectedWorkingDays : 0
+  const paidDays = Math.min(attendedDays + paidLeaveDays, expectedWorkingDays)
   const regularPay = paidDays * perDayValue
-  const deductionDays = Math.max(0, emp.expected_work_days - paidDays)
+  const deductionDays = Math.max(0, expectedWorkingDays - paidDays)
 
   let otHoursPrev = 0
   let otMidnightPrev = 0
@@ -1310,6 +1315,7 @@ function buildPayslip(
     paidLeaveDays,
     unpaidLeaveDays,
     deductionDays,
+    expectedWorkingDays,
     perDayValue,
     regularPay,
     overtimeHoursPrev: otHoursPrev,
@@ -1552,8 +1558,15 @@ function DeductionsTab({ employees, settings }: { employees: Employee[]; setting
 
   const employee = employees.find((e) => e.id === employeeId)
   const money = (n: number) => formatMoney(n, settings)
-  // Worth of one working day for the selected employee (base salary ÷ expected work-days per month).
-  const dayValue = employee && employee.expected_work_days > 0 ? Number(employee.base_salary) / employee.expected_work_days : 0
+  // Worth of one working day for the selected employee, based on this calendar
+  // month's actual working days (every day except Fridays) rather than a fixed assumption.
+  const now = new Date()
+  const thisMonthWorkingDays = workingDaysInRange(
+    toYmd(new Date(now.getFullYear(), now.getMonth(), 1)),
+    toYmd(new Date(now.getFullYear(), now.getMonth() + 1, 0)),
+    settings.weekly_off_day,
+  )
+  const dayValue = employee && thisMonthWorkingDays > 0 ? Number(employee.base_salary) / thisMonthWorkingDays : 0
 
   useEffect(() => {
     if (employeeId) load()
@@ -1583,7 +1596,7 @@ function DeductionsTab({ employees, settings }: { employees: Employee[]; setting
     if (useDays) {
       workDays = Number(f.get('work_days'))
       if (!(workDays > 0)) return alert('Enter the number of working days to deduct (greater than 0).')
-      if (!(dayValue > 0)) return alert('This employee has no base salary / expected work-days set, so a day value cannot be calculated.')
+      if (!(dayValue > 0)) return alert('This employee has no base salary set, so a day value cannot be calculated.')
       total = workDays * dayValue
       per = total // a work-day penalty is taken from the next salary in one go
     } else {
@@ -1760,7 +1773,7 @@ function DeductionsTab({ employees, settings }: { employees: Employee[]; setting
                   <label className="mb-1 block text-[11px] text-slate-400">Number of working days</label>
                   <input name="work_days" type="number" step="0.5" min="0" required className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
                   <p className="mt-1 text-[11px] text-slate-500">
-                    One working day = {money(dayValue)} (base ÷ {employee.expected_work_days} work-days). Taken from the next salary in full.
+                    One working day = {money(dayValue)} (base ÷ {thisMonthWorkingDays} working days this month). Taken from the next salary in full.
                   </p>
                 </div>
               ) : (
@@ -1890,6 +1903,7 @@ type Payslip = {
   paidLeaveDays: number
   unpaidLeaveDays: number
   deductionDays: number
+  expectedWorkingDays: number
   perDayValue: number
   regularPay: number
   overtimeHoursPrev: number
@@ -2051,7 +2065,7 @@ function PayrollTab({ employees, settings, onChanged }: { employees: Employee[];
       position: p.employee.position,
       base_salary: Number(p.employee.base_salary),
       per_day_value: p.perDayValue,
-      expected_days: p.employee.expected_work_days,
+      expected_days: p.expectedWorkingDays,
       attended_days: p.attendedDays,
       paid_leave_days: p.paidLeaveDays,
       unpaid_days: p.deductionDays,
@@ -2131,7 +2145,7 @@ function PayrollTab({ employees, settings, onChanged }: { employees: Employee[];
       payDateLabel: formatDate(payDate),
       baseSalary: Number(p.employee.base_salary),
       perDayValue: p.perDayValue,
-      expectedDays: p.employee.expected_work_days,
+      expectedDays: p.expectedWorkingDays,
       attendedDays: p.attendedDays,
       paidLeaveDays: p.paidLeaveDays,
       unpaidDays: p.deductionDays,
@@ -2162,7 +2176,7 @@ function PayrollTab({ employees, settings, onChanged }: { employees: Employee[];
         </div>
         <div className="rounded-lg bg-slate-50 p-3 text-xs text-slate-600">
           <p className="font-medium text-navy-800">How this is calculated</p>
-          <p>Base is pro-rated by attendance (base ÷ expected work-days × paid days). Approved leave within the yearly allowance counts as paid; unpaid or over-allowance leave and plain absences are deducted. Every figure here — attendance, overtime, and the profit-share bonus — is deliberately one full month behind the pay date, so the books have time to close first.</p>
+          <p>Base is pro-rated by attendance (base ÷ that period's actual working days, every day except Friday × paid days). Approved leave within the yearly allowance counts as paid; unpaid or over-allowance leave and plain absences are deducted. Every figure here — attendance, overtime, and the profit-share bonus — is deliberately one full month behind the pay date, so the books have time to close first.</p>
           <p className="mt-1">
             Profit-share pool = {settings.profit_share_percent}% × net profit of {formatDate(profitPeriod.start)}–{formatDate(profitPeriod.end)} ({money(poolInfo.netPrev)}) ={' '}
             <span className="font-medium text-navy-800">{money(poolInfo.pool)}</span>, split equally = {money(poolInfo.perEmployee)} each.
@@ -2256,7 +2270,7 @@ function PayrollTab({ employees, settings, onChanged }: { employees: Employee[];
                   <tr className="border-t border-slate-100">
                     <td className="px-3 py-2 font-medium text-navy-900">{employeeFullName(p.employee)}</td>
                     <td className="px-3 py-2">
-                      {p.attendedDays}/{p.employee.expected_work_days}
+                      {p.attendedDays}/{p.expectedWorkingDays}
                       {p.paidLeaveDays > 0 && <span className="ml-1 text-xs text-green-600">+{p.paidLeaveDays}L</span>}
                     </td>
                     <td className="px-3 py-2">{money(p.regularPay)}</td>
@@ -2277,7 +2291,7 @@ function PayrollTab({ employees, settings, onChanged }: { employees: Employee[];
                     <tr className="border-t border-slate-100 bg-slate-50 text-xs text-slate-600">
                       <td colSpan={8} className="px-3 py-3">
                         <ul className="space-y-1">
-                          <li>Base salary: {money(Number(p.employee.base_salary))} · one day = {money(p.perDayValue)} ({p.employee.expected_work_days} expected days)</li>
+                          <li>Base salary: {money(Number(p.employee.base_salary))} · one day = {money(p.perDayValue)} ({p.expectedWorkingDays} working days this period)</li>
                           <li>
                             Attended {p.attendedDays} day(s){p.paidLeaveDays > 0 && <> + {p.paidLeaveDays} paid-leave day(s)</>} → base pay {money(p.regularPay)}
                           </li>
@@ -2346,6 +2360,7 @@ function PayrollTab({ employees, settings, onChanged }: { employees: Employee[];
 type SummaryRow = {
   emp: Employee
   present: number
+  expectedWorkingDays: number
   hours: number
   overtime: number
   late: number
@@ -2439,7 +2454,7 @@ function SummaryTab({ employees, settings }: { employees: Employee[]; settings: 
       ).length
 
       const slip = buildPayslip(emp, attendance, allLeave, allDeductions, perEmployee, settings, bounds)
-      return { emp, present, hours, overtime, late, paidLeave, absent, netPay: slip.total }
+      return { emp, present, expectedWorkingDays: slip.expectedWorkingDays, hours, overtime, late, paidLeave, absent, netPay: slip.total }
     })
     setRows(result)
     setLoading(false)
@@ -2510,7 +2525,7 @@ function SummaryTab({ employees, settings }: { employees: Employee[]; settings: 
                     {r.emp.position && <span className="ml-1 text-xs text-slate-400">· {r.emp.position}</span>}
                   </td>
                   <td className="px-3 py-2 text-right">
-                    {r.present}/{r.emp.expected_work_days}
+                    {r.present}/{r.expectedWorkingDays}
                   </td>
                   <td className="px-3 py-2 text-right">{r.hours.toFixed(1)}</td>
                   <td className="px-3 py-2 text-right">{r.overtime > 0 ? r.overtime.toFixed(1) : '—'}</td>

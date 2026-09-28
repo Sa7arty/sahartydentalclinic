@@ -1461,3 +1461,14 @@ create extension if not exists pg_net;
 -- SUPABASE_SERVICE_ROLE_KEY (auto-injected into every edge function's
 -- environment regardless of how the function was invoked) for its actual
 -- privileged reads/writes.
+
+-- Removed 2026-09-28 (drop_expected_work_days): the fixed "expected work
+-- days per month" setting on employees.expected_work_days (originally
+-- defined at line ~687 above) didn't match reality — a period's actual
+-- working-day count depends on how many Fridays happen to fall in it (25,
+-- 26, or 27), not a flat assumed number. Payroll and Deductions now compute
+-- this per period on the fly (every calendar day except the weekly off day —
+-- see workingDaysInRange in src/pages/HR.tsx) instead of reading a stored
+-- setting, so the column is gone; the Employee Form no longer has a field
+-- for it either.
+alter table public.employees drop column if exists expected_work_days;
