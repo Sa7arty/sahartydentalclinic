@@ -1916,10 +1916,19 @@ function PayrollTab({ employees, settings, onChanged }: { employees: Employee[];
   const [runs, setRuns] = useState<PayrollRun[]>([])
   const [activeDeductions, setActiveDeductions] = useState<EmployeeDeduction[]>([])
 
+  // Deliberate one-cycle lag: "September" payroll (paid the 28th) is built from
+  // August's attendance -- the salary period ending in the PREVIOUS calendar
+  // month -- and August's calendar-month profit, giving the books a full month
+  // to close before the numbers driving pay and bonuses are treated as final.
   const payMonth = useMemo(() => new Date(Number(month.slice(0, 4)), Number(month.slice(5, 7)) - 1, 15), [month])
-  const curPeriod = useMemo(() => salaryPeriodFor(payMonth, settings.salary_period_start_day), [payMonth, settings.salary_period_start_day])
   const prevPayMonth = useMemo(() => new Date(payMonth.getFullYear(), payMonth.getMonth() - 1, 15), [payMonth])
+  // The attendance/overtime period: e.g. Jul 26 -> Aug 25 for a September run.
   const prevPeriod = useMemo(() => salaryPeriodFor(prevPayMonth, settings.salary_period_start_day), [prevPayMonth, settings.salary_period_start_day])
+  // The profit-share basis: the real calendar month sharing prevPeriod's name (August), not the shifted 26-25 range.
+  const profitPeriod = useMemo(
+    () => ({ start: new Date(prevPayMonth.getFullYear(), prevPayMonth.getMonth(), 1), end: new Date(prevPayMonth.getFullYear(), prevPayMonth.getMonth() + 1, 0) }),
+    [prevPayMonth],
+  )
   const payDate = new Date(payMonth.getFullYear(), payMonth.getMonth(), settings.salary_pay_day)
 
   const activeEmployees = useMemo(() => employees.filter((e) => e.active), [employees])
@@ -1931,17 +1940,14 @@ function PayrollTab({ employees, settings, onChanged }: { employees: Employee[];
 
   async function compute() {
     setLoading(true)
-    const curStart = toYmd(curPeriod.start)
-    const curEnd = toYmd(curPeriod.end)
     const prevStart = toYmd(prevPeriod.start)
     const prevEnd = toYmd(prevPeriod.end)
+    const profitStart = toYmd(profitPeriod.start)
+    const profitEnd = toYmd(profitPeriod.end)
 
-    // Attendance for both periods (all employees at once)
-    const { data: att } = await supabase
-      .from('employee_attendance')
-      .select('*')
-      .gte('work_date', prevStart)
-      .lte('work_date', curEnd)
+    // Attendance for the pay-driving period (all employees at once) — this
+    // single period covers both regular pay and overtime; see the note above.
+    const { data: att } = await supabase.from('employee_attendance').select('*').gte('work_date', prevStart).lte('work_date', prevEnd)
     const attendance = (att as EmployeeAttendance[]) ?? []
 
     // All approved leave (needed to compute the running annual allowance correctly).
@@ -1965,13 +1971,14 @@ function PayrollTab({ employees, settings, onChanged }: { employees: Employee[];
     }
     supabase.from('payroll_runs').select('*').order('pay_month', { ascending: false }).then(({ data }) => setRuns((data as PayrollRun[]) ?? []))
 
-    // Net profit for the PREVIOUS period drives the profit-share bonus.
-    const prevStartIso = new Date(`${prevStart}T00:00:00`).toISOString()
-    const prevEndIso = new Date(`${prevEnd}T23:59:59`).toISOString()
+    // Net profit for the real calendar month sharing the attendance period's
+    // name (e.g. August 1-31, not the shifted Jul 26 -> Aug 25 range) drives the profit-share bonus.
+    const profitStartIso = new Date(`${profitStart}T00:00:00`).toISOString()
+    const profitEndIso = new Date(`${profitEnd}T23:59:59`).toISOString()
     const [pays, exps, misc] = await Promise.all([
-      fetchAllRows<any>(() => supabase.from('ledger_entries').select('amount').eq('entry_type', 'payment').gte('occurred_at', prevStartIso).lte('occurred_at', prevEndIso)),
-      fetchAllRows<any>(() => supabase.from('expenses').select('amount').gte('occurred_at', prevStartIso).lte('occurred_at', prevEndIso)),
-      fetchAllRows<any>(() => supabase.from('misc_income').select('amount').gte('occurred_at', prevStartIso).lte('occurred_at', prevEndIso)),
+      fetchAllRows<any>(() => supabase.from('ledger_entries').select('amount').eq('entry_type', 'payment').gte('occurred_at', profitStartIso).lte('occurred_at', profitEndIso)),
+      fetchAllRows<any>(() => supabase.from('expenses').select('amount').gte('occurred_at', profitStartIso).lte('occurred_at', profitEndIso)),
+      fetchAllRows<any>(() => supabase.from('misc_income').select('amount').gte('occurred_at', profitStartIso).lte('occurred_at', profitEndIso)),
     ])
     const incomePrev = (pays ?? []).reduce((s, r: any) => s + Number(r.amount), 0) + (misc ?? []).reduce((s, r: any) => s + Number(r.amount), 0)
     const expensePrev = (exps ?? []).reduce((s, r: any) => s + Number(r.amount), 0)
@@ -1980,7 +1987,10 @@ function PayrollTab({ employees, settings, onChanged }: { employees: Employee[];
     const perEmployee = activeEmployees.length > 0 ? pool / activeEmployees.length : 0
     setPoolInfo({ netPrev, pool, perEmployee })
 
-    const bounds = { curStart, curEnd, prevStart, prevEnd, payDateYmd: toYmd(payDate) }
+    // curStart/curEnd feed buildPayslip's "current period" slot with the SAME
+    // range as prevStart/prevEnd, so attendance and overtime end up computed
+    // from the one unified attendance period instead of two different ones.
+    const bounds = { curStart: prevStart, curEnd: prevEnd, prevStart, prevEnd, payDateYmd: toYmd(payDate) }
     const result: Payslip[] = activeEmployees.map((emp) => buildPayslip(emp, attendance, allLeave, allDeductions, perEmployee, settings, bounds))
     setSlips(result)
     setLoading(false)
@@ -2019,8 +2029,8 @@ function PayrollTab({ employees, settings, onChanged }: { employees: Employee[];
       .from('payroll_runs')
       .insert({
         pay_month: payMonthYmd,
-        period_start: toYmd(curPeriod.start),
-        period_end: toYmd(curPeriod.end),
+        period_start: toYmd(prevPeriod.start),
+        period_end: toYmd(prevPeriod.end),
         pay_date: toYmd(payDate),
         total_amount: totalAmount,
         expense_id: exp.id,
@@ -2089,7 +2099,7 @@ function PayrollTab({ employees, settings, onChanged }: { employees: Employee[];
       position: p.position,
       currency: settings.currency,
       periodLabel: run ? `${formatDate(run.period_start)} → ${formatDate(run.period_end)}` : '',
-      bonusPeriodLabel: `${formatDate(prevPeriod.start)} → ${formatDate(prevPeriod.end)}`,
+      bonusPeriodLabel: `${formatDate(profitPeriod.start)} → ${formatDate(profitPeriod.end)}`,
       payDateLabel: run ? formatDate(run.pay_date) : '',
       baseSalary: Number(p.base_salary),
       perDayValue: Number(p.per_day_value),
@@ -2116,8 +2126,8 @@ function PayrollTab({ employees, settings, onChanged }: { employees: Employee[];
       employeeName: employeeFullName(p.employee),
       position: p.employee.position,
       currency: settings.currency,
-      periodLabel: `${formatDate(curPeriod.start)} → ${formatDate(curPeriod.end)}`,
-      bonusPeriodLabel: `${formatDate(prevPeriod.start)} → ${formatDate(prevPeriod.end)}`,
+      periodLabel: `${formatDate(prevPeriod.start)} → ${formatDate(prevPeriod.end)}`,
+      bonusPeriodLabel: `${formatDate(profitPeriod.start)} → ${formatDate(profitPeriod.end)}`,
       payDateLabel: formatDate(payDate),
       baseSalary: Number(p.employee.base_salary),
       perDayValue: p.perDayValue,
@@ -2146,15 +2156,15 @@ function PayrollTab({ employees, settings, onChanged }: { employees: Employee[];
           </div>
           <div className="text-right text-xs text-slate-500">
             <p>Pay date: <span className="font-medium text-navy-800">{formatDate(payDate)}</span></p>
-            <p>Attendance: {formatDate(curPeriod.start)} → {formatDate(curPeriod.end)}</p>
-            <p>Bonuses earned: {formatDate(prevPeriod.start)} → {formatDate(prevPeriod.end)}</p>
+            <p>Attendance & overtime: {formatDate(prevPeriod.start)} → {formatDate(prevPeriod.end)}</p>
+            <p>Profit-share basis: {formatDate(profitPeriod.start)} → {formatDate(profitPeriod.end)}</p>
           </div>
         </div>
         <div className="rounded-lg bg-slate-50 p-3 text-xs text-slate-600">
           <p className="font-medium text-navy-800">How this is calculated</p>
-          <p>Base is pro-rated by attendance (base ÷ expected work-days × paid days). Approved leave within the yearly allowance counts as paid; unpaid or over-allowance leave and plain absences are deducted. Overtime and the profit-share bonus are earned in the previous period and paid this month (bonuses always lag one month).</p>
+          <p>Base is pro-rated by attendance (base ÷ expected work-days × paid days). Approved leave within the yearly allowance counts as paid; unpaid or over-allowance leave and plain absences are deducted. Every figure here — attendance, overtime, and the profit-share bonus — is deliberately one full month behind the pay date, so the books have time to close first.</p>
           <p className="mt-1">
-            Profit-share pool = {settings.profit_share_percent}% × net profit of {formatDate(prevPeriod.start)}–{formatDate(prevPeriod.end)} ({money(poolInfo.netPrev)}) ={' '}
+            Profit-share pool = {settings.profit_share_percent}% × net profit of {formatDate(profitPeriod.start)}–{formatDate(profitPeriod.end)} ({money(poolInfo.netPrev)}) ={' '}
             <span className="font-medium text-navy-800">{money(poolInfo.pool)}</span>, split equally = {money(poolInfo.perEmployee)} each.
           </p>
         </div>
@@ -2349,10 +2359,16 @@ function SummaryTab({ employees, settings }: { employees: Employee[]; settings: 
   const [rows, setRows] = useState<SummaryRow[]>([])
   const [loading, setLoading] = useState(false)
 
+  // Same one-cycle lag as Payroll: attendance/overtime come from the salary
+  // period ending in the previous calendar month, profit-share from that
+  // month's real calendar range — see the note in PayrollTab above.
   const payMonth = useMemo(() => new Date(Number(month.slice(0, 4)), Number(month.slice(5, 7)) - 1, 15), [month])
-  const curPeriod = useMemo(() => salaryPeriodFor(payMonth, settings.salary_period_start_day), [payMonth, settings.salary_period_start_day])
   const prevPayMonth = useMemo(() => new Date(payMonth.getFullYear(), payMonth.getMonth() - 1, 15), [payMonth])
   const prevPeriod = useMemo(() => salaryPeriodFor(prevPayMonth, settings.salary_period_start_day), [prevPayMonth, settings.salary_period_start_day])
+  const profitPeriod = useMemo(
+    () => ({ start: new Date(prevPayMonth.getFullYear(), prevPayMonth.getMonth(), 1), end: new Date(prevPayMonth.getFullYear(), prevPayMonth.getMonth() + 1, 0) }),
+    [prevPayMonth],
+  )
   const payDate = new Date(payMonth.getFullYear(), payMonth.getMonth(), settings.salary_pay_day)
   const activeEmployees = useMemo(() => employees.filter((e) => e.active), [employees])
   const monthLabel = payMonth.toLocaleString('en', { month: 'long', year: 'numeric' })
@@ -2365,13 +2381,13 @@ function SummaryTab({ employees, settings }: { employees: Employee[]; settings: 
 
   async function compute() {
     setLoading(true)
-    const curStart = toYmd(curPeriod.start)
-    const curEnd = toYmd(curPeriod.end)
-    const prevStart = toYmd(prevPeriod.start)
-    const prevEnd = toYmd(prevPeriod.end)
+    const attStart = toYmd(prevPeriod.start)
+    const attEnd = toYmd(prevPeriod.end)
+    const profitStart = toYmd(profitPeriod.start)
+    const profitEnd = toYmd(profitPeriod.end)
 
     const [{ data: att }, { data: lv }, { data: ded }] = await Promise.all([
-      supabase.from('employee_attendance').select('*').gte('work_date', prevStart).lte('work_date', curEnd),
+      supabase.from('employee_attendance').select('*').gte('work_date', attStart).lte('work_date', attEnd),
       supabase.from('employee_leave').select('*').eq('status', 'approved'),
       supabase.from('employee_deductions').select('*').eq('active', true),
     ])
@@ -2379,13 +2395,13 @@ function SummaryTab({ employees, settings }: { employees: Employee[]; settings: 
     const allLeave = (lv as EmployeeLeave[]) ?? []
     const allDeductions = (ded as EmployeeDeduction[]) ?? []
 
-    // Profit-share pool comes from the previous period's net profit (bonuses lag one month).
-    const prevStartIso = new Date(`${prevStart}T00:00:00`).toISOString()
-    const prevEndIso = new Date(`${prevEnd}T23:59:59`).toISOString()
+    // Profit-share pool comes from the real calendar month's net profit.
+    const profitStartIso = new Date(`${profitStart}T00:00:00`).toISOString()
+    const profitEndIso = new Date(`${profitEnd}T23:59:59`).toISOString()
     const [pays, exps, misc] = await Promise.all([
-      fetchAllRows<any>(() => supabase.from('ledger_entries').select('amount').eq('entry_type', 'payment').gte('occurred_at', prevStartIso).lte('occurred_at', prevEndIso)),
-      fetchAllRows<any>(() => supabase.from('expenses').select('amount').gte('occurred_at', prevStartIso).lte('occurred_at', prevEndIso)),
-      fetchAllRows<any>(() => supabase.from('misc_income').select('amount').gte('occurred_at', prevStartIso).lte('occurred_at', prevEndIso)),
+      fetchAllRows<any>(() => supabase.from('ledger_entries').select('amount').eq('entry_type', 'payment').gte('occurred_at', profitStartIso).lte('occurred_at', profitEndIso)),
+      fetchAllRows<any>(() => supabase.from('expenses').select('amount').gte('occurred_at', profitStartIso).lte('occurred_at', profitEndIso)),
+      fetchAllRows<any>(() => supabase.from('misc_income').select('amount').gte('occurred_at', profitStartIso).lte('occurred_at', profitEndIso)),
     ])
     const netPrev =
       (pays ?? []).reduce((s, r: any) => s + Number(r.amount), 0) +
@@ -2394,31 +2410,31 @@ function SummaryTab({ employees, settings }: { employees: Employee[]; settings: 
     const pool = Math.max(0, netPrev) * (settings.profit_share_percent / 100)
     const perEmployee = activeEmployees.length > 0 ? pool / activeEmployees.length : 0
 
-    const bounds = { curStart, curEnd, prevStart, prevEnd, payDateYmd: toYmd(payDate) }
+    const bounds = { curStart: attStart, curEnd: attEnd, prevStart: attStart, prevEnd: attEnd, payDateYmd: toYmd(payDate) }
     const todayYmd = toYmd(new Date())
 
     const result: SummaryRow[] = activeEmployees.map((emp) => {
-      const curRows = attendance.filter((a) => a.employee_id === emp.id && a.work_date >= curStart && a.work_date <= curEnd)
+      const attRows = attendance.filter((a) => a.employee_id === emp.id && a.work_date >= attStart && a.work_date <= attEnd)
       const rules = otRules(emp, settings)
-      const hours = curRows.reduce((s, r) => s + attendanceHours(r), 0)
-      const overtime = curRows.reduce((s, r) => {
+      const hours = attRows.reduce((s, r) => s + attendanceHours(r), 0)
+      const overtime = attRows.reduce((s, r) => {
         const o = overtimeForDay(r, rules)
         return s + o.otBeforeMidnight + o.otAfterMidnight
       }, 0)
-      const present = curRows.filter((r) => !isWeeklyOffDate(r.work_date, settings.weekly_off_day)).length
-      const late = curRows.filter((r) => isLateRow(emp, r, settings)).length
+      const present = attRows.filter((r) => !isWeeklyOffDate(r.work_date, settings.weekly_off_day)).length
+      const late = attRows.filter((r) => isLateRow(emp, r, settings)).length
 
       const { statusByDate } = computeLeave(allLeave.filter((l) => l.employee_id === emp.id), emp.annual_leave_days)
-      const attendedSet = new Set(curRows.map((r) => r.work_date))
+      const attendedSet = new Set(attRows.map((r) => r.work_date))
       const leaveDates = new Set<string>()
       let paidLeave = 0
       for (const [date, info] of statusByDate) {
-        if (date < curStart || date > curEnd) continue
+        if (date < attStart || date > attEnd) continue
         leaveDates.add(date)
         if (!attendedSet.has(date) && info.status === 'paid') paidLeave++
       }
       // Absences so far: elapsed working days with no attendance and no approved leave.
-      const absent = eachDateInclusive(curStart, curEnd).filter(
+      const absent = eachDateInclusive(attStart, attEnd).filter(
         (d) => d <= todayYmd && !isWeeklyOffDate(d, settings.weekly_off_day) && !attendedSet.has(d) && !leaveDates.has(d),
       ).length
 
@@ -2449,7 +2465,7 @@ function SummaryTab({ employees, settings }: { employees: Employee[]; settings: 
           <label className="mb-1 block text-xs text-slate-500">Salary month</label>
           <input type="month" value={month} onChange={(e) => setMonth(e.target.value)} className="rounded-lg border border-slate-300 px-3 py-2 text-sm" />
           <p className="mt-1 text-xs text-slate-500">
-            Attendance: {formatDate(curPeriod.start)} → {formatDate(curPeriod.end)}
+            Attendance: {formatDate(prevPeriod.start)} → {formatDate(prevPeriod.end)}
           </p>
         </div>
         <button
