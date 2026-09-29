@@ -30,7 +30,7 @@ import {
 import { toYmd, fromYmd, startOfWeek, formatDate, formatDateTime, toDatetimeLocal } from '../lib/dates'
 import { exportOutstandingBalancesPdf, exportPaymentReceiptPdf } from '../lib/pdf'
 
-type SideTab = 'cashflow' | 'income' | 'expenses' | 'outstanding'
+type SideTab = 'cashflow' | 'income' | 'expenses' | 'discounts' | 'outstanding'
 type Period =
   | 'today'
   | 'yesterday'
@@ -159,6 +159,7 @@ export default function Balance() {
   const [income, setIncome] = useState<IncomeRow[]>([])
   const [miscIncome, setMiscIncome] = useState<MiscIncome[]>([])
   const [expenses, setExpenses] = useState<ExpenseRow[]>([])
+  const [discounts, setDiscounts] = useState<IncomeRow[]>([])
   const [recurring, setRecurring] = useState<RecurringExpense[]>([])
   const [categories, setCategories] = useState<ExpenseCategory[]>([])
   const [items, setItems] = useState<ExpenseItem[]>([])
@@ -250,6 +251,7 @@ export default function Balance() {
       setIncome([])
       setMiscIncome([])
       setExpenses([])
+      setDiscounts([])
       setLoading(false)
       return
     }
@@ -284,15 +286,28 @@ export default function Balance() {
       if (to) q = q.lte('occurred_at', to.toISOString())
       return q
     }
+    const buildDiscounts = () => {
+      let q = supabase
+        .from('ledger_entries')
+        .select('*, patients(id, first_name, middle_name, last_name, file_number)')
+        .eq('entry_type', 'discount')
+        .order('occurred_at', { ascending: false })
+        .order('id', { ascending: true })
+      if (from) q = q.gte('occurred_at', from.toISOString())
+      if (to) q = q.lte('occurred_at', to.toISOString())
+      return q
+    }
 
-    const [incomeData, expenseData, miscData] = await Promise.all([
+    const [incomeData, expenseData, miscData, discountData] = await Promise.all([
       fetchAllRows<IncomeRow>(buildIncome),
       fetchAllRows<ExpenseRow>(buildExpense),
       fetchAllRows<MiscIncome>(buildMisc),
+      fetchAllRows<IncomeRow>(buildDiscounts),
     ])
     setIncome(incomeData)
     setExpenses(expenseData)
     setMiscIncome(miscData)
+    setDiscounts(discountData)
     setLoading(false)
   }
 
@@ -430,6 +445,7 @@ export default function Balance() {
   const miscIncomeTotal = miscIncome.reduce((sum, r) => sum + Number(r.amount), 0)
   const incomeTotal = income.reduce((sum, r) => sum + Number(r.amount), 0) + miscIncomeTotal
   const expensesTotal = expenses.reduce((sum, r) => sum + Number(r.amount), 0)
+  const discountsTotal = discounts.reduce((sum, r) => sum + Number(r.amount), 0)
   const net = incomeTotal - expensesTotal
 
   // Rows-per-page comes from the global setting and applies to every tab.
@@ -489,6 +505,7 @@ export default function Balance() {
   const pagedCash = paginate(cashItems)
   const pagedIncome = paginate(incomeItems)
   const pagedExpenses = paginate(expenses)
+  const pagedDiscounts = paginate(discounts)
   const pagedOutstanding = paginate(outstanding)
 
   const Pager = ({ p, totalPages, total }: { p: number; totalPages: number; total: number }) =>
@@ -517,7 +534,7 @@ export default function Balance() {
 
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-1 rounded-lg border border-slate-300 bg-white p-1 text-sm">
-          {(['cashflow', 'income', 'expenses', 'outstanding'] as SideTab[]).map((t) => (
+          {(['cashflow', 'income', 'expenses', 'discounts', 'outstanding'] as SideTab[]).map((t) => (
             <button
               key={t}
               onClick={() => setTab(t)}
@@ -726,7 +743,7 @@ export default function Balance() {
           </div>
           <Pager p={pagedIncome.p} totalPages={pagedIncome.totalPages} total={pagedIncome.total} />
         </div>
-      ) : (
+      ) : tab === 'expenses' ? (
         <div className="space-y-4">
           <div className="rounded-xl border border-slate-200 bg-white p-4">
             <p className="text-sm text-slate-500">Total expenses</p>
@@ -910,6 +927,26 @@ export default function Balance() {
             )}
           </div>
           <Pager p={pagedExpenses.p} totalPages={pagedExpenses.totalPages} total={pagedExpenses.total} />
+        </div>
+      ) : (
+        <div className="space-y-4">
+          <div className="rounded-xl border border-slate-200 bg-white p-4">
+            <p className="text-sm text-slate-500">Total discounts</p>
+            <p className="text-2xl font-semibold text-amber-600">{money(discountsTotal)}</p>
+          </div>
+          <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+            {discounts.length === 0 && <p className="p-4 text-sm text-slate-500">No discounts given in this period.</p>}
+            {pagedDiscounts.items.map((row) => (
+              <div key={row.id} className="flex items-center justify-between gap-3 border-b border-slate-100 px-4 py-3 last:border-0 hover:bg-slate-50">
+                <Link to={row.patients ? `/patients/${row.patients.id}` : '#'} className="min-w-0 flex-1">
+                  <p className="font-medium text-navy-900">{row.patients ? patientFullName(row.patients) : 'Unknown patient'}</p>
+                  <p className="text-xs text-slate-400">{formatDateTime(row.occurred_at)}</p>
+                </Link>
+                <p className="w-24 shrink-0 text-right font-medium text-amber-600">−{money(Number(row.amount))}</p>
+              </div>
+            ))}
+          </div>
+          <Pager p={pagedDiscounts.p} totalPages={pagedDiscounts.totalPages} total={pagedDiscounts.total} />
         </div>
       )}
     </div>
