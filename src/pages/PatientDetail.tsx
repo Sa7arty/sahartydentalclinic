@@ -671,6 +671,11 @@ export default function PatientDetail() {
 
   const money = (n: number) => formatMoney(n, settings)
   const balance = ledger.reduce((sum, l) => sum + (l.entry_type === 'charge' ? Number(l.amount) : -Number(l.amount)), 0)
+  const totalOwed = ledger.filter((l) => l.entry_type === 'charge').reduce((sum, l) => sum + Number(l.amount), 0)
+  const totalPaid = ledger.filter((l) => l.entry_type === 'payment').reduce((sum, l) => sum + Number(l.amount), 0)
+  const totalDiscount = ledger.filter((l) => l.entry_type === 'discount').reduce((sum, l) => sum + Number(l.amount), 0)
+  const totalProviderFees = clinicCosts.filter((c) => c.expense_type === 'provider_fee').reduce((sum, c) => sum + Number(c.amount), 0)
+  const totalLabFees = clinicCosts.filter((c) => c.expense_type === 'lab_fee').reduce((sum, c) => sum + Number(c.amount), 0)
 
   // Soonest upcoming appointment that isn't cancelled/missed (visits are sorted newest-first).
   const nowIso = new Date().toISOString()
@@ -1361,7 +1366,11 @@ export default function PatientDetail() {
                       <p className="text-navy-900">
                         <span
                           className={`mr-1.5 rounded px-1.5 py-0.5 text-[10px] font-medium uppercase ${
-                            row.ledger.entry_type === 'discount' ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-500'
+                            row.ledger.entry_type === 'discount'
+                              ? 'bg-amber-100 text-amber-700'
+                              : row.ledger.entry_type === 'payment'
+                              ? 'bg-green-100 text-green-700'
+                              : 'bg-red-100 text-red-700'
                           }`}
                         >
                           {LEDGER_LABELS[row.ledger.entry_type]}
@@ -1462,6 +1471,29 @@ export default function PatientDetail() {
                 </div>
               ),
             )}
+          </div>
+
+          <div className="grid grid-cols-2 gap-3 rounded-xl border border-slate-200 bg-white p-4 sm:grid-cols-5">
+            <div>
+              <p className="text-xs text-slate-500">Total owed</p>
+              <p className="font-medium text-navy-900">{money(totalOwed)}</p>
+            </div>
+            <div>
+              <p className="text-xs text-slate-500">Total paid</p>
+              <p className="font-medium text-green-600">{money(totalPaid)}</p>
+            </div>
+            <div>
+              <p className="text-xs text-slate-500">Total discount</p>
+              <p className="font-medium text-amber-600">{money(totalDiscount)}</p>
+            </div>
+            <div>
+              <p className="text-xs text-slate-500">Total provider fees</p>
+              <p className="font-medium text-red-600">{money(totalProviderFees)}</p>
+            </div>
+            <div>
+              <p className="text-xs text-slate-500">Total lab fees</p>
+              <p className="font-medium text-red-600">{money(totalLabFees)}</p>
+            </div>
           </div>
         </div>
       )}
