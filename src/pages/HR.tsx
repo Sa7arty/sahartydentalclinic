@@ -1160,7 +1160,7 @@ function AttendanceTab({ employees, settings }: { employees: Employee[]; setting
                         </td>
                         <td className="px-3 py-2">{r.check_out?.slice(0, 5) ?? '—'}</td>
                         <td className="px-3 py-2">{h.toFixed(1)}</td>
-                        <td className="px-3 py-2">{ot > 0 ? ot.toFixed(1) : '—'}</td>
+                        <td className="px-3 py-2">{ot > 0 ? `${Math.round(ot * 60)} min` : '—'}</td>
                         <td className="px-3 py-2 text-right">
                           <button onClick={() => startEdit(d, r)} className="mr-3 text-xs font-medium text-navy-700 hover:underline">
                             Edit
