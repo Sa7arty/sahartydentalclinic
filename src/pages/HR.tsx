@@ -942,7 +942,12 @@ function AttendanceTab({ employees, settings }: { employees: Employee[]; setting
   const [month, setMonth] = useState(() => toYmd(new Date()).slice(0, 7)) // yyyy-mm
   const [rows, setRows] = useState<EmployeeAttendance[]>([])
   const [leaveByDate, setLeaveByDate] = useState<Map<string, EmployeeLeave>>(new Map())
-  const [editing, setEditing] = useState<EmployeeAttendance | null>(null)
+  // The day currently being edited right inside its own table row.
+  const [editing, setEditing] = useState<{ date: string; check_in: string; check_out: string; note: string } | null>(null)
+
+  function startEdit(date: string, r?: EmployeeAttendance) {
+    setEditing({ date, check_in: r?.check_in?.slice(0, 5) ?? '', check_out: r?.check_out?.slice(0, 5) ?? '', note: r?.note ?? '' })
+  }
 
   const employee = employees.find((e) => e.id === employeeId)
   const payMonth = useMemo(() => new Date(Number(month.slice(0, 4)), Number(month.slice(5, 7)) - 1, 15), [month])
@@ -966,25 +971,46 @@ function AttendanceTab({ employees, settings }: { employees: Employee[]; setting
 
   const isLate = (r: EmployeeAttendance): boolean => (employee ? isLateRow(employee, r, settings) : false)
 
-  async function handleSubmit(e: FormEvent<HTMLFormElement>) {
-    e.preventDefault()
-    if (!isDentist && !can('attendance', 'edit')) return
-    const f = new FormData(e.currentTarget)
+  async function saveDay(day: { work_date: string; check_in: string; check_out: string; note: string }): Promise<boolean> {
+    if (!isDentist && !can('attendance', 'edit')) return false
     const { error } = await supabase.from('employee_attendance').upsert(
       {
         employee_id: employeeId,
-        work_date: f.get('work_date'),
-        check_in: f.get('check_in') || null,
-        check_out: f.get('check_out') || null,
-        note: f.get('note') || null,
+        work_date: day.work_date,
+        check_in: day.check_in || null,
+        check_out: day.check_out || null,
+        note: day.note || null,
         created_by: session?.user.id,
       },
       { onConflict: 'employee_id,work_date' },
     )
-    if (error) return alert(error.message)
-    e.currentTarget.reset()
-    setEditing(null)
-    loadRows()
+    if (error) {
+      alert(error.message)
+      return false
+    }
+    await loadRows()
+    return true
+  }
+
+  // Top form: add (or overwrite) a day by picking any date.
+  async function handleSubmit(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault()
+    const form = e.currentTarget
+    const f = new FormData(form)
+    const ok = await saveDay({
+      work_date: f.get('work_date') as string,
+      check_in: (f.get('check_in') as string) || '',
+      check_out: (f.get('check_out') as string) || '',
+      note: (f.get('note') as string) || '',
+    })
+    if (ok) form.reset()
+  }
+
+  // Inline row editor: save what was typed in the day's own row.
+  async function handleInlineSave() {
+    if (!editing) return
+    const ok = await saveDay({ work_date: editing.date, check_in: editing.check_in, check_out: editing.check_out, note: editing.note })
+    if (ok) setEditing(null)
   }
 
   async function handleDelete(id: string) {
@@ -1039,22 +1065,22 @@ function AttendanceTab({ employees, settings }: { employees: Employee[]; setting
           <form onSubmit={handleSubmit} className="grid gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3 sm:grid-cols-4">
             <div>
               <label className="mb-1 block text-xs text-slate-500">Date</label>
-              <input name="work_date" type="date" required defaultValue={editing?.work_date ?? toYmd(new Date())} className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+              <input name="work_date" type="date" required defaultValue={toYmd(new Date())} className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
             </div>
             <div>
               <label className="mb-1 block text-xs text-slate-500">Check in</label>
-              <input name="check_in" type="time" defaultValue={editing?.check_in?.slice(0, 5) ?? ''} className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+              <input name="check_in" type="time" className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
             </div>
             <div>
               <label className="mb-1 block text-xs text-slate-500">Check out</label>
-              <input name="check_out" type="time" defaultValue={editing?.check_out?.slice(0, 5) ?? ''} className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+              <input name="check_out" type="time" className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
             </div>
             <div className="flex items-end">
               <button type="submit" className="w-full rounded-lg bg-navy-900 px-3 py-2 text-sm font-medium text-white hover:bg-navy-800">
-                {editing ? 'Update day' : 'Add day'}
+                Add day
               </button>
             </div>
-            <input name="note" placeholder="Note (optional)" defaultValue={editing?.note ?? ''} className="rounded-lg border border-slate-300 px-3 py-2 text-sm sm:col-span-4" />
+            <input name="note" placeholder="Note (optional)" className="rounded-lg border border-slate-300 px-3 py-2 text-sm sm:col-span-4" />
           </form>
 
           <div className="grid grid-cols-2 gap-3 text-center sm:grid-cols-5">
@@ -1086,6 +1112,34 @@ function AttendanceTab({ employees, settings }: { employees: Employee[]; setting
                   const leave = leaveByDate.get(d)
                   const isFuture = d > todayYmd
 
+                  // Row being edited: the time fields appear right here in the day's own row.
+                  if (editing && editing.date === d) {
+                    const inputCls = 'w-full rounded border border-slate-300 px-2 py-1 text-sm'
+                    return (
+                      <tr key={d} className="border-t border-slate-100 bg-amber-50">
+                        <td className="px-3 py-2 text-slate-500">{weekday}</td>
+                        <td className="px-3 py-2">{formatDate(d)}</td>
+                        <td className="px-2 py-2">
+                          <input type="time" autoFocus value={editing.check_in} onChange={(e) => setEditing({ ...editing, check_in: e.target.value })} className={inputCls} />
+                        </td>
+                        <td className="px-2 py-2">
+                          <input type="time" value={editing.check_out} onChange={(e) => setEditing({ ...editing, check_out: e.target.value })} className={inputCls} />
+                        </td>
+                        <td colSpan={2} className="px-2 py-2">
+                          <input placeholder="Note (optional)" value={editing.note} onChange={(e) => setEditing({ ...editing, note: e.target.value })} className={inputCls} />
+                        </td>
+                        <td className="whitespace-nowrap px-3 py-2 text-right">
+                          <button onClick={handleInlineSave} className="mr-3 text-xs font-semibold text-green-700 hover:underline">
+                            Save
+                          </button>
+                          <button onClick={() => setEditing(null)} className="text-xs text-slate-500 hover:underline">
+                            Cancel
+                          </button>
+                        </td>
+                      </tr>
+                    )
+                  }
+
                   // An actual attendance record always wins — e.g. someone who
                   // worked on their weekly-off day still shows their real hours,
                   // just with a small badge noting it was their day off.
@@ -1108,7 +1162,7 @@ function AttendanceTab({ employees, settings }: { employees: Employee[]; setting
                         <td className="px-3 py-2">{h.toFixed(1)}</td>
                         <td className="px-3 py-2">{ot > 0 ? ot.toFixed(1) : '—'}</td>
                         <td className="px-3 py-2 text-right">
-                          <button onClick={() => setEditing(r)} className="mr-3 text-xs font-medium text-navy-700 hover:underline">
+                          <button onClick={() => startEdit(d, r)} className="mr-3 text-xs font-medium text-navy-700 hover:underline">
                             Edit
                           </button>
                           <button onClick={() => handleDelete(r.id)} className="text-xs text-red-600 hover:underline">
@@ -1153,7 +1207,7 @@ function AttendanceTab({ employees, settings }: { employees: Employee[]; setting
                       <td className="px-3 py-2 text-right">
                         {!isFuture && !beforeHire && (
                           <button
-                            onClick={() => setEditing({ id: '', employee_id: employeeId, work_date: d, check_in: null, check_out: null, note: null, created_at: '' })}
+                            onClick={() => startEdit(d)}
                             className="text-xs font-medium text-navy-700 hover:underline"
                           >
                             Add
