@@ -46,8 +46,9 @@ import {
 } from '../types'
 import { formatDate, toYmd } from '../lib/dates'
 import { exportPayslipPdf, exportStaffSummaryPdf } from '../lib/pdf'
+import HrSettingsTab from '../components/HrSettingsTab'
 
-type HrTab = 'employees' | 'attendance' | 'leave' | 'deductions' | 'payroll' | 'summary'
+type HrTab = 'employees' | 'attendance' | 'leave' | 'deductions' | 'payroll' | 'summary' | 'settings'
 
 const card = 'space-y-3 rounded-xl border border-slate-200 bg-white p-4'
 
@@ -111,6 +112,8 @@ export default function HR() {
     { key: 'deductions', label: 'Deductions & loans' },
     { key: 'payroll', label: 'Payroll' },
     { key: 'summary', label: 'Summary' },
+    // HR's own settings — owner (or anyone granted Settings access) only.
+    ...(isDentist || canAccess('settings') ? [{ key: 'settings' as HrTab, label: 'Settings' }] : []),
   ]
 
   return (
@@ -143,6 +146,8 @@ export default function HR() {
         <DeductionsTab employees={employees} settings={settings} />
       ) : tab === 'summary' ? (
         <SummaryTab employees={employees} settings={settings} />
+      ) : tab === 'settings' ? (
+        <HrSettingsTab />
       ) : (
         <PayrollTab employees={employees} settings={settings} onChanged={loadEmployees} />
       )}
@@ -1301,6 +1306,49 @@ function isLateRow(emp: Employee, r: Pick<EmployeeAttendance, 'check_in'>, setti
 }
 
 /**
+ * Days that count towards an employee's share of the profit-share bonus within
+ * [start, end]: days actually attended (the weekly day off never counts) plus
+ * paid approved leave. Counting starts at their first day of work, so someone
+ * who joined mid-month is only measured over the days they were employed.
+ */
+function bonusDaysFor(emp: Employee, attendance: EmployeeAttendance[], allLeave: EmployeeLeave[], settings: AppSettings, start: string, end: string): number {
+  const from = emp.hire_date && emp.hire_date > start ? emp.hire_date : start
+  if (from > end) return 0
+  const attended = new Set(
+    attendance
+      .filter((a) => a.employee_id === emp.id && a.work_date >= from && a.work_date <= end && !isWeeklyOffDate(a.work_date, settings.weekly_off_day))
+      .map((a) => a.work_date),
+  )
+  const { statusByDate } = computeLeave(allLeave.filter((l) => l.employee_id === emp.id), emp.annual_leave_days)
+  let paidLeave = 0
+  for (const [date, info] of statusByDate) {
+    if (date < from || date > end || isWeeklyOffDate(date, settings.weekly_off_day) || attended.has(date)) continue
+    if (info.status === 'paid') paidLeave++
+  }
+  return attended.size + paidLeave
+}
+
+/**
+ * Splits the profit-share pool among employees in proportion to the days each
+ * one worked in the bonus month (see bonusDaysFor): share = pool × days ÷ everyone's days.
+ */
+function splitProfitPool(
+  emps: Employee[],
+  attendance: EmployeeAttendance[],
+  allLeave: EmployeeLeave[],
+  settings: AppSettings,
+  start: string,
+  end: string,
+  pool: number,
+): { byEmployee: Map<string, { days: number; share: number }>; totalDays: number } {
+  const days = emps.map((e) => ({ id: e.id, days: bonusDaysFor(e, attendance, allLeave, settings, start, end) }))
+  const totalDays = days.reduce((t, d) => t + d.days, 0)
+  const byEmployee = new Map<string, { days: number; share: number }>()
+  for (const d of days) byEmployee.set(d.id, { days: d.days, share: totalDays > 0 ? (pool * d.days) / totalDays : 0 })
+  return { byEmployee, totalDays }
+}
+
+/**
  * Compute one employee's payslip for a salary month. Shared by the Payroll tab and the Summary tab
  * so both always agree. `attendance` may contain rows for any employee across both periods — it is
  * filtered here. Base pay is pro-rated by attendance; overtime and profit-share are earned in the
@@ -1311,7 +1359,7 @@ function buildPayslip(
   attendance: EmployeeAttendance[],
   allLeave: EmployeeLeave[],
   allDeductions: EmployeeDeduction[],
-  perEmployee: number,
+  bonus: { share: number; days: number },
   settings: AppSettings,
   bounds: { curStart: string; curEnd: string; otStart: string; otEnd: string; payDateYmd: string },
 ): Payslip {
@@ -1354,7 +1402,7 @@ function buildPayslip(
     otMidnightPrev += o.otAfterMidnight
     overtimePayPrev += o.otBeforeMidnight * Number(emp.overtime_hourly_rate) + o.otAfterMidnight * Number(emp.overtime_hourly_rate) * mult
   }
-  const profitSharePrev = perEmployee
+  const profitSharePrev = bonus.share
   const gross = regularPay + overtimePayPrev + profitSharePrev
 
   const deductions = allDeductions
@@ -1386,6 +1434,7 @@ function buildPayslip(
     overtimeMidnightHoursPrev: otMidnightPrev,
     overtimePayPrev,
     profitSharePrev,
+    profitShareDays: bonus.days,
     gross,
     deductions,
     deductionsTotal,
@@ -1975,6 +2024,7 @@ type Payslip = {
   overtimeMidnightHoursPrev: number
   overtimePayPrev: number
   profitSharePrev: number
+  profitShareDays: number
   gross: number
   deductions: { id: string; description: string; amount: number; kind: DeductionKind }[]
   deductionsTotal: number
@@ -1986,7 +2036,7 @@ function PayrollTab({ employees, settings, onChanged }: { employees: Employee[];
   const { session, isDentist, can } = useAuth()
   const [month, setMonth] = useState(() => toYmd(new Date()).slice(0, 7))
   const [slips, setSlips] = useState<Payslip[]>([])
-  const [poolInfo, setPoolInfo] = useState({ netPrev: 0, pool: 0, perEmployee: 0 })
+  const [poolInfo, setPoolInfo] = useState({ netPrev: 0, pool: 0, totalDays: 0 })
   const [expanded, setExpanded] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [finalizing, setFinalizing] = useState(false)
@@ -2031,8 +2081,8 @@ function PayrollTab({ employees, settings, onChanged }: { employees: Employee[];
     // period drives base pay, the previous salary period drives overtime.
     const otStart = toYmd(otPeriod.start)
     const otEnd = toYmd(otPeriod.end)
-    const attFrom = curStart < otStart ? curStart : otStart
-    const attTo = curEnd > otEnd ? curEnd : otEnd
+    const attFrom = [curStart, otStart, profitStart].reduce((m, d) => (d < m ? d : m))
+    const attTo = [curEnd, otEnd, profitEnd].reduce((m, d) => (d > m ? d : m))
     const { data: att } = await supabase.from('employee_attendance').select('*').gte('work_date', attFrom).lte('work_date', attTo)
     const attendance = (att as EmployeeAttendance[]) ?? []
 
@@ -2070,12 +2120,12 @@ function PayrollTab({ employees, settings, onChanged }: { employees: Employee[];
     const expensePrev = (exps ?? []).reduce((s, r: any) => s + Number(r.amount), 0)
     const netPrev = incomePrev - expensePrev
     const pool = Math.max(0, netPrev) * (settings.profit_share_percent / 100)
-    const perEmployee = activeEmployees.length > 0 ? pool / activeEmployees.length : 0
-    setPoolInfo({ netPrev, pool, perEmployee })
+    const { byEmployee: bonusByEmp, totalDays: bonusTotalDays } = splitProfitPool(activeEmployees, attendance, allLeave, settings, profitStart, profitEnd, pool)
+    setPoolInfo({ netPrev, pool, totalDays: bonusTotalDays })
 
     // cur* = base-pay period; ot* = overtime period (previous salary period).
     const bounds = { curStart, curEnd, otStart, otEnd, payDateYmd: toYmd(payDate) }
-    const result: Payslip[] = activeEmployees.map((emp) => buildPayslip(emp, attendance, allLeave, allDeductions, perEmployee, settings, bounds))
+    const result: Payslip[] = activeEmployees.map((emp) => buildPayslip(emp, attendance, allLeave, allDeductions, bonusByEmp.get(emp.id) ?? { share: 0, days: 0 }, settings, bounds))
     setSlips(result)
     setLoading(false)
   }
@@ -2247,10 +2297,10 @@ function PayrollTab({ employees, settings, onChanged }: { employees: Employee[];
         </div>
         <div className="rounded-lg bg-slate-50 p-3 text-xs text-slate-600">
           <p className="font-medium text-navy-800">How this is calculated</p>
-          <p>Base is pro-rated by attendance (base ÷ that period's actual working days, every day except Friday × paid days). Approved leave within the yearly allowance counts as paid; unpaid or over-allowance leave and plain absences are deducted. Base pay follows this salary period's attendance. Overtime follows the previous salary period (same cycle as base pay, paid one month later). The profit-share bonus comes from the previous calendar month.</p>
+          <p>Base is pro-rated by attendance (base ÷ that period's actual working days, every day except Friday × paid days). Approved leave within the yearly allowance counts as paid; unpaid or over-allowance leave and plain absences are deducted. Base pay follows this salary period's attendance. Overtime follows the previous salary period (same cycle as base pay, paid one month later). The profit-share bonus comes from the previous calendar month and is split in proportion to the days each employee worked in it (attended days + paid leave, counted from their first day of work).</p>
           <p className="mt-1">
             Profit-share pool = {settings.profit_share_percent}% × net profit of {formatDate(profitPeriod.start)}–{formatDate(profitPeriod.end)} ({money(poolInfo.netPrev)}) ={' '}
-            <span className="font-medium text-navy-800">{money(poolInfo.pool)}</span>, split equally = {money(poolInfo.perEmployee)} each.
+            <span className="font-medium text-navy-800">{money(poolInfo.pool)}</span>, split in proportion to the days each employee worked ({poolInfo.totalDays} days in total{poolInfo.totalDays > 0 && <> → {money(poolInfo.pool / poolInfo.totalDays)} per day worked</>}).
           </p>
         </div>
       </div>
@@ -2375,7 +2425,7 @@ function PayrollTab({ employees, settings, onChanged }: { employees: Employee[];
                             Overtime (previous period): {p.overtimeHoursPrev.toFixed(1)} hrs × {money(Number(p.employee.overtime_hourly_rate))}
                             {p.overtimeMidnightHoursPrev > 0 && <> · incl. {p.overtimeMidnightHoursPrev.toFixed(1)} hr after midnight ×{settings.overtime_midnight_multiplier}</>} = {money(p.overtimePayPrev)}
                           </li>
-                          <li>Profit share (previous period): {money(p.profitSharePrev)}</li>
+                          <li>Profit share: {p.profitShareDays} day(s) worked in {formatDate(profitPeriod.start)}–{formatDate(profitPeriod.end)} → {money(p.profitSharePrev)}</li>
                           {p.deductions.map((d) => (
                             <li key={d.id} className="text-red-600">
                               {d.kind === 'loan' ? 'Loan installment' : 'Deduction'}: {d.description} → −{money(d.amount)}
@@ -2474,8 +2524,8 @@ function SummaryTab({ employees, settings }: { employees: Employee[]; settings: 
     const profitEnd = toYmd(profitPeriod.end)
     const otStart = toYmd(otPeriod.start)
     const otEnd = toYmd(otPeriod.end)
-    const attFrom = attStart < otStart ? attStart : otStart
-    const attTo = attEnd > otEnd ? attEnd : otEnd
+    const attFrom = [attStart, otStart, profitStart].reduce((m, d) => (d < m ? d : m))
+    const attTo = [attEnd, otEnd, profitEnd].reduce((m, d) => (d > m ? d : m))
 
     const [{ data: att }, { data: lv }, { data: ded }] = await Promise.all([
       supabase.from('employee_attendance').select('*').gte('work_date', attFrom).lte('work_date', attTo),
@@ -2499,7 +2549,7 @@ function SummaryTab({ employees, settings }: { employees: Employee[]; settings: 
       (misc ?? []).reduce((s, r: any) => s + Number(r.amount), 0) -
       (exps ?? []).reduce((s, r: any) => s + Number(r.amount), 0)
     const pool = Math.max(0, netPrev) * (settings.profit_share_percent / 100)
-    const perEmployee = activeEmployees.length > 0 ? pool / activeEmployees.length : 0
+    const { byEmployee: bonusByEmp } = splitProfitPool(activeEmployees, attendance, allLeave, settings, profitStart, profitEnd, pool)
 
     const bounds = { curStart: attStart, curEnd: attEnd, otStart, otEnd, payDateYmd: toYmd(payDate) }
     const todayYmd = toYmd(new Date())
@@ -2530,7 +2580,7 @@ function SummaryTab({ employees, settings }: { employees: Employee[]; settings: 
         (d) => d <= todayYmd && d >= (emp.hire_date ?? '') && !isWeeklyOffDate(d, settings.weekly_off_day) && !attendedSet.has(d) && !leaveDates.has(d),
       ).length
 
-      const slip = buildPayslip(emp, attendance, allLeave, allDeductions, perEmployee, settings, bounds)
+      const slip = buildPayslip(emp, attendance, allLeave, allDeductions, bonusByEmp.get(emp.id) ?? { share: 0, days: 0 }, settings, bounds)
       return { emp, present, expectedWorkingDays: slip.expectedWorkingDays, hours, overtime, late, paidLeave, absent, netPay: slip.total }
     })
     setRows(result)

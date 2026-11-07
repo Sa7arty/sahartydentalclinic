@@ -107,7 +107,7 @@ function ClockWidget() {
   async function verifyAtClinic(): Promise<boolean> {
     setError(null)
     if (settings.clinic_latitude == null || settings.clinic_longitude == null) {
-      setError("The clinic's location hasn't been set up yet — ask the owner to set it in Settings → Attendance.")
+      setError("The clinic's location hasn't been set up yet — ask the owner to set it in HR → Settings.")
       return false
     }
     let pos: GeolocationPosition

@@ -7,8 +7,7 @@ import {
   PatientGroup,
   ProcedureCategory,
   Procedure,
-  ExpenseCategory,
-  ExpenseItem,
+  
   REQUIRABLE_PATIENT_FIELDS,
   ChartScope,
   CHART_SCOPE_LABELS,
@@ -31,15 +30,13 @@ import AuditLogTab from '../components/AuditLogTab'
 const DURATION_OPTIONS = [15, 20, 30, 45, 60, 75, 90, 120, 180, 240, 300]
 const WEEKDAY_FULL_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
 
-type Category = 'patients' | 'calendar' | 'procedures' | 'price-list' | 'financial' | 'attendance' | 'templates' | 'reminders' | 'security' | 'audit' | 'backup' | 'errors'
+type Category = 'patients' | 'calendar' | 'procedures' | 'price-list' | 'templates' | 'reminders' | 'security' | 'audit' | 'backup' | 'errors'
 
 const CATEGORIES: { key: Category; label: string }[] = [
   { key: 'patients', label: 'Patients' },
   { key: 'calendar', label: 'Calendar & scheduling' },
   { key: 'procedures', label: 'Procedures & conditions' },
   { key: 'price-list', label: 'Price list' },
-  { key: 'financial', label: 'Financial' },
-  { key: 'attendance', label: 'Attendance' },
   { key: 'templates', label: 'Templates' },
   { key: 'reminders', label: 'Reminders' },
   { key: 'security', label: 'Security' },
@@ -95,11 +92,6 @@ export default function Settings() {
   const [conditions, setConditions] = useState<{ id: string; name: string; active: boolean }[]>([])
   const [newConditionName, setNewConditionName] = useState('')
 
-  const [expenseCategories, setExpenseCategories] = useState<ExpenseCategory[]>([])
-  const [newExpenseCategory, setNewExpenseCategory] = useState('')
-  const [expenseItems, setExpenseItems] = useState<ExpenseItem[]>([])
-  const [newExpenseItem, setNewExpenseItem] = useState<Record<string, string>>({})
-
   const [procCategories, setProcCategories] = useState<ProcedureCategory[]>([])
   const [newProcCategory, setNewProcCategory] = useState('')
   const [procedures, setProcedures] = useState<Procedure[]>([])
@@ -111,26 +103,9 @@ export default function Settings() {
   const [showAddCondition, setShowAddCondition] = useState(false)
   const [procFilter, setProcFilter] = useState<string>('all')
 
-  const [currency, setCurrency] = useState(settings.currency)
   const [defaultCountry, setDefaultCountry] = useState(settings.default_country ?? '')
   const [defaultNationality, setDefaultNationality] = useState(settings.default_nationality ?? '')
-  const [profitSharePercent, setProfitSharePercent] = useState(settings.profit_share_percent)
-  const [salaryPeriodStartDay, setSalaryPeriodStartDay] = useState(settings.salary_period_start_day)
-  const [salaryPayDay, setSalaryPayDay] = useState(settings.salary_pay_day)
-  const [leaveEligibilityMonths, setLeaveEligibilityMonths] = useState(settings.leave_eligibility_months)
-  const [midnightMultiplier, setMidnightMultiplier] = useState(settings.overtime_midnight_multiplier)
-  const [earlyOtCap, setEarlyOtCap] = useState(settings.early_overtime_cap_hours)
-  const [salaryRounding, setSalaryRounding] = useState(settings.salary_rounding)
-  const [weeklyOffDay, setWeeklyOffDay] = useState(settings.weekly_off_day)
-  const [lateGraceMinutes, setLateGraceMinutes] = useState(settings.late_grace_minutes)
-  const [bigDebtThreshold, setBigDebtThreshold] = useState(settings.big_debt_threshold)
-  const [savingFinancial, setSavingFinancial] = useState(false)
-
-  const [clinicLat, setClinicLat] = useState(settings.clinic_latitude)
-  const [clinicLng, setClinicLng] = useState(settings.clinic_longitude)
-  const [attendanceRadius, setAttendanceRadius] = useState(settings.attendance_radius_meters)
-  const [locating, setLocating] = useState(false)
-  const [savingAttendance, setSavingAttendance] = useState(false)
+  const [savingDefaults, setSavingDefaults] = useState(false)
 
   const [importing, setImporting] = useState(false)
   const [importSummary, setImportSummary] = useState<string | null>(null)
@@ -148,22 +123,8 @@ export default function Settings() {
     setWeekStartDay(settings.week_start_day)
     setDefaultDuration(settings.default_visit_duration_minutes)
     setVisitProviderRequired(settings.visit_provider_required)
-    setCurrency(settings.currency)
     setDefaultCountry(settings.default_country ?? '')
     setDefaultNationality(settings.default_nationality ?? '')
-    setProfitSharePercent(settings.profit_share_percent)
-    setSalaryPeriodStartDay(settings.salary_period_start_day)
-    setSalaryPayDay(settings.salary_pay_day)
-    setLeaveEligibilityMonths(settings.leave_eligibility_months)
-    setMidnightMultiplier(settings.overtime_midnight_multiplier)
-    setEarlyOtCap(settings.early_overtime_cap_hours)
-    setSalaryRounding(settings.salary_rounding)
-    setWeeklyOffDay(settings.weekly_off_day)
-    setLateGraceMinutes(settings.late_grace_minutes)
-    setBigDebtThreshold(settings.big_debt_threshold)
-    setClinicLat(settings.clinic_latitude)
-    setClinicLng(settings.clinic_longitude)
-    setAttendanceRadius(settings.attendance_radius_meters)
     setReminderSettings(settings.whatsapp_reminder_settings)
   }, [settings])
 
@@ -174,7 +135,6 @@ export default function Settings() {
     loadProcedureCategories()
     loadProcedures()
     loadDiagnosisConditions()
-    loadExpenseCategories()
     loadErrorLogs()
   }, [])
 
@@ -258,51 +218,6 @@ export default function Settings() {
     else loadConditions()
   }
 
-  // ---- expense categories list ----
-  async function loadExpenseCategories() {
-    const { data } = await supabase.from('expense_categories').select('*').order('name')
-    setExpenseCategories((data as ExpenseCategory[]) ?? [])
-    const { data: items } = await supabase.from('expense_items').select('*').order('name')
-    setExpenseItems((items as ExpenseItem[]) ?? [])
-  }
-  async function handleAddExpenseCategory(e: FormEvent<HTMLFormElement>) {
-    e.preventDefault()
-    const name = newExpenseCategory.trim()
-    if (!name) return
-    const { error } = await supabase.from('expense_categories').insert({ name })
-    if (error) alert(error.message)
-    else {
-      setNewExpenseCategory('')
-      loadExpenseCategories()
-    }
-  }
-  async function handleDeleteExpenseCategory(id: string) {
-    if (!(await confirmDialog('Delete this category and its items?'))) return
-    const { error } = await supabase.from('expense_categories').delete().eq('id', id)
-    if (error) alert(error.message)
-    else loadExpenseCategories()
-  }
-  async function handleAddExpenseItem(categoryId: string) {
-    const name = (newExpenseItem[categoryId] ?? '').trim()
-    if (!name) return
-    const { error } = await supabase.from('expense_items').insert({ category_id: categoryId, name })
-    if (error) alert(error.message)
-    else {
-      setNewExpenseItem((m) => ({ ...m, [categoryId]: '' }))
-      loadExpenseCategories()
-    }
-  }
-  async function handleDeleteExpenseItem(id: string) {
-    const { error } = await supabase.from('expense_items').delete().eq('id', id)
-    if (error) alert(error.message)
-    else loadExpenseCategories()
-  }
-  async function updateExpenseReq(patch: Record<string, boolean>) {
-    const { error } = await supabase.from('app_settings').update(patch).eq('id', true)
-    if (error) alert(error.message)
-    else await refresh()
-  }
-
   // ---- procedures ----
   async function handleAddProcCategory(e: FormEvent<HTMLFormElement>) {
     e.preventDefault()
@@ -372,55 +287,14 @@ export default function Settings() {
   }
 
   // ---- app_settings saves ----
-  async function handleSaveFinancial(e: FormEvent<HTMLFormElement>) {
+  async function handleSaveDefaults(e: FormEvent<HTMLFormElement>) {
     e.preventDefault()
-    setSavingFinancial(true)
+    setSavingDefaults(true)
     const { error } = await supabase
       .from('app_settings')
-      .update({
-        currency: currency.trim() || 'EGP',
-        default_country: defaultCountry.trim() || null,
-        default_nationality: defaultNationality.trim() || null,
-        profit_share_percent: profitSharePercent,
-        salary_period_start_day: salaryPeriodStartDay,
-        salary_pay_day: salaryPayDay,
-        leave_eligibility_months: leaveEligibilityMonths,
-        overtime_midnight_multiplier: midnightMultiplier,
-        early_overtime_cap_hours: earlyOtCap,
-        salary_rounding: salaryRounding,
-        weekly_off_day: weeklyOffDay,
-        late_grace_minutes: lateGraceMinutes,
-        big_debt_threshold: bigDebtThreshold,
-      })
+      .update({ default_country: defaultCountry.trim() || null, default_nationality: defaultNationality.trim() || null })
       .eq('id', true)
-    setSavingFinancial(false)
-    if (error) alert(error.message)
-    else await refresh()
-  }
-  function handleUseMyLocation() {
-    if (!navigator.geolocation) return alert("Your browser doesn't support location.")
-    setLocating(true)
-    navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        setClinicLat(pos.coords.latitude)
-        setClinicLng(pos.coords.longitude)
-        setLocating(false)
-      },
-      (err) => {
-        setLocating(false)
-        alert(err.code === 1 ? 'Location access was denied — allow it for this site in your browser settings and try again.' : "Couldn't get your location. Please try again.")
-      },
-      { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 },
-    )
-  }
-  async function handleSaveAttendance(e: FormEvent<HTMLFormElement>) {
-    e.preventDefault()
-    setSavingAttendance(true)
-    const { error } = await supabase
-      .from('app_settings')
-      .update({ clinic_latitude: clinicLat, clinic_longitude: clinicLng, attendance_radius_meters: attendanceRadius })
-      .eq('id', true)
-    setSavingAttendance(false)
+    setSavingDefaults(false)
     if (error) alert(error.message)
     else await refresh()
   }
@@ -564,6 +438,32 @@ export default function Settings() {
 
       {category === 'patients' && (
         <div className="space-y-4">
+          {/* defaults for new patient files */}
+          <form onSubmit={handleSaveDefaults} className={card}>
+            <div>
+              <h2 className="font-medium text-navy-900">Defaults for new patient files</h2>
+              <p className="text-sm text-slate-500">Pre-filled when a new patient is added.</p>
+            </div>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div>
+                <label className="mb-1 block text-sm text-slate-500">Default country</label>
+                <input value={defaultCountry} onChange={(e) => setDefaultCountry(e.target.value)} list="settings-country-options" className="w-full rounded-lg border border-slate-300 px-3 py-2" />
+              </div>
+              <div>
+                <label className="mb-1 block text-sm text-slate-500">Default nationality</label>
+                <input value={defaultNationality} onChange={(e) => setDefaultNationality(e.target.value)} list="settings-country-options" className="w-full rounded-lg border border-slate-300 px-3 py-2" />
+              </div>
+            </div>
+            <datalist id="settings-country-options">
+              {WORLD_COUNTRIES.map((c) => (
+                <option key={c} value={c} />
+              ))}
+            </datalist>
+            <button type="submit" disabled={savingDefaults} className="rounded-lg bg-navy-900 px-4 py-2 text-sm font-medium text-white hover:bg-navy-800 disabled:opacity-50">
+              {savingDefaults ? 'Saving…' : 'Save'}
+            </button>
+          </form>
+
           {/* mandatory fields + markers */}
           <form onSubmit={handleSavePatients} className={card}>
             <div>
@@ -992,173 +892,6 @@ export default function Settings() {
         </div>
       )}
 
-      {category === 'financial' && (
-        <form onSubmit={handleSaveFinancial} className={card}>
-          <div>
-            <h2 className="font-medium text-navy-900">Financial &amp; defaults</h2>
-            <p className="text-sm text-slate-500">Currency shown across payments, expenses and balances, plus default values for new patient files.</p>
-          </div>
-          <div className="grid gap-4 sm:grid-cols-3">
-            <div>
-              <label className="mb-1 block text-sm text-slate-500">Currency</label>
-              <input value={currency} onChange={(e) => setCurrency(e.target.value)} placeholder="EGP" className="w-full rounded-lg border border-slate-300 px-3 py-2" />
-            </div>
-            <div>
-              <label className="mb-1 block text-sm text-slate-500">Default country (new patients)</label>
-              <input value={defaultCountry} onChange={(e) => setDefaultCountry(e.target.value)} list="settings-country-options" className="w-full rounded-lg border border-slate-300 px-3 py-2" />
-            </div>
-            <div>
-              <label className="mb-1 block text-sm text-slate-500">Default nationality (new patients)</label>
-              <input value={defaultNationality} onChange={(e) => setDefaultNationality(e.target.value)} list="settings-country-options" className="w-full rounded-lg border border-slate-300 px-3 py-2" />
-            </div>
-            <div>
-              <label className="mb-1 block text-sm text-slate-500">“Owes a lot” threshold ({currency || 'EGP'})</label>
-              <input type="number" min="0" step="1" value={bigDebtThreshold} onChange={(e) => setBigDebtThreshold(Number(e.target.value))} className="w-full rounded-lg border border-slate-300 px-3 py-2" />
-              <p className="mt-0.5 text-[11px] text-slate-400">Patients owing this amount or more get an amber “owes a lot” tag on the Dashboard.</p>
-            </div>
-          </div>
-          <datalist id="settings-country-options">
-            {WORLD_COUNTRIES.map((c) => (
-              <option key={c} value={c} />
-            ))}
-          </datalist>
-
-          <div className="border-t border-slate-100 pt-3">
-            <h3 className="font-medium text-navy-900">Payroll (HR)</h3>
-            <p className="text-sm text-slate-500">Used by the HR payroll calculator.</p>
-          </div>
-          <div className="grid gap-4 sm:grid-cols-3">
-            <div>
-              <label className="mb-1 block text-sm text-slate-500">Profit-share to staff (%)</label>
-              <input
-                type="number"
-                min="0"
-                max="100"
-                step="0.1"
-                value={profitSharePercent}
-                onChange={(e) => setProfitSharePercent(Number(e.target.value))}
-                className="w-full rounded-lg border border-slate-300 px-3 py-2"
-              />
-              <p className="mt-0.5 text-[11px] text-slate-400">Share of net profit split equally among active staff as a bonus.</p>
-            </div>
-            <div>
-              <label className="mb-1 block text-sm text-slate-500">Salary period starts on day</label>
-              <input type="number" min="1" max="28" value={salaryPeriodStartDay} onChange={(e) => setSalaryPeriodStartDay(Number(e.target.value))} className="w-full rounded-lg border border-slate-300 px-3 py-2" />
-              <p className="mt-0.5 text-[11px] text-slate-400">e.g. 26 → attendance runs 26th to 25th.</p>
-            </div>
-            <div>
-              <label className="mb-1 block text-sm text-slate-500">Salary paid on day</label>
-              <input type="number" min="1" max="28" value={salaryPayDay} onChange={(e) => setSalaryPayDay(Number(e.target.value))} className="w-full rounded-lg border border-slate-300 px-3 py-2" />
-            </div>
-            <div>
-              <label className="mb-1 block text-sm text-slate-500">No-leave period for new staff (months)</label>
-              <input type="number" min="0" max="36" value={leaveEligibilityMonths} onChange={(e) => setLeaveEligibilityMonths(Number(e.target.value))} className="w-full rounded-lg border border-slate-300 px-3 py-2" />
-              <p className="mt-0.5 text-[11px] text-slate-400">Employees can't take leave for this many months after their first day.</p>
-            </div>
-            <div>
-              <label className="mb-1 block text-sm text-slate-500">After-midnight overtime ×</label>
-              <input type="number" min="1" step="0.1" value={midnightMultiplier} onChange={(e) => setMidnightMultiplier(Number(e.target.value))} className="w-full rounded-lg border border-slate-300 px-3 py-2" />
-              <p className="mt-0.5 text-[11px] text-slate-400">Overtime hours worked after 12 AM are paid at this multiple.</p>
-            </div>
-            <div>
-              <label className="mb-1 block text-sm text-slate-500">Early-arrival overtime cap (hours)</label>
-              <input type="number" min="0" step="0.5" value={earlyOtCap} onChange={(e) => setEarlyOtCap(Number(e.target.value))} className="w-full rounded-lg border border-slate-300 px-3 py-2" />
-              <p className="mt-0.5 text-[11px] text-slate-400">Max overtime credited for showing up before a fixed shift starts.</p>
-            </div>
-            <div>
-              <label className="mb-1 block text-sm text-slate-500">Round net salary to nearest</label>
-              <select value={salaryRounding} onChange={(e) => setSalaryRounding(Number(e.target.value))} className="w-full rounded-lg border border-slate-300 px-3 py-2">
-                <option value={0}>No rounding</option>
-                <option value={5}>5</option>
-                <option value={10}>10</option>
-                <option value={25}>25</option>
-                <option value={50}>50</option>
-                <option value={100}>100</option>
-              </select>
-              <p className="mt-0.5 text-[11px] text-slate-400">Each employee's final total is rounded (categories stay exact).</p>
-            </div>
-            <div>
-              <label className="mb-1 block text-sm text-slate-500">Weekly day off</label>
-              <select value={weeklyOffDay} onChange={(e) => setWeeklyOffDay(Number(e.target.value))} className="w-full rounded-lg border border-slate-300 px-3 py-2">
-                {['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'].map((d, i) => (
-                  <option key={i} value={i}>
-                    {d}
-                  </option>
-                ))}
-              </select>
-              <p className="mt-0.5 text-[11px] text-slate-400">Working this day: every hour counts as overtime.</p>
-            </div>
-            <div>
-              <label className="mb-1 block text-sm text-slate-500">Late after (minutes)</label>
-              <input type="number" min="0" max="120" value={lateGraceMinutes} onChange={(e) => setLateGraceMinutes(Number(e.target.value))} className="w-full rounded-lg border border-slate-300 px-3 py-2" />
-              <p className="mt-0.5 text-[11px] text-slate-400">Grace period — a “Late” flag shows only after this many minutes past shift start.</p>
-            </div>
-          </div>
-
-          <button type="submit" disabled={savingFinancial} className="rounded-lg bg-navy-900 px-4 py-2 text-sm font-medium text-white hover:bg-navy-800 disabled:opacity-50">
-            {savingFinancial ? 'Saving…' : 'Save'}
-          </button>
-        </form>
-      )}
-
-      {category === 'attendance' && (
-        <form onSubmit={handleSaveAttendance} className={card}>
-          <div>
-            <h2 className="font-medium text-navy-900">Digital sign in / sign out</h2>
-            <p className="text-sm text-slate-500">
-              Staff with a login (see Team &amp; access, or "Create a login" on an employee under HR) get Sign In / Sign Out buttons on their Dashboard. They can only be used from within the radius
-              below of the clinic's exact coordinates — the browser asks the staff member to share their location the first time they try.
-            </p>
-          </div>
-
-          <div className="grid gap-4 sm:grid-cols-3">
-            <div>
-              <label className="mb-1 block text-sm text-slate-500">Clinic latitude</label>
-              <input
-                type="number"
-                step="any"
-                value={clinicLat ?? ''}
-                onChange={(e) => setClinicLat(e.target.value === '' ? null : Number(e.target.value))}
-                placeholder="e.g. 31.2001"
-                className="w-full rounded-lg border border-slate-300 px-3 py-2"
-              />
-            </div>
-            <div>
-              <label className="mb-1 block text-sm text-slate-500">Clinic longitude</label>
-              <input
-                type="number"
-                step="any"
-                value={clinicLng ?? ''}
-                onChange={(e) => setClinicLng(e.target.value === '' ? null : Number(e.target.value))}
-                placeholder="e.g. 29.9187"
-                className="w-full rounded-lg border border-slate-300 px-3 py-2"
-              />
-            </div>
-            <div>
-              <label className="mb-1 block text-sm text-slate-500">Allowed radius (meters)</label>
-              <input type="number" min="10" step="10" value={attendanceRadius} onChange={(e) => setAttendanceRadius(Number(e.target.value))} className="w-full rounded-lg border border-slate-300 px-3 py-2" />
-              <p className="mt-0.5 text-[11px] text-slate-400">Phone GPS drifts indoors — 100m is a safe default.</p>
-            </div>
-          </div>
-
-          <div>
-            <button
-              type="button"
-              onClick={handleUseMyLocation}
-              disabled={locating}
-              className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-navy-800 hover:bg-slate-50 disabled:opacity-50"
-            >
-              {locating ? 'Getting your location…' : '📍 Use my current location'}
-            </button>
-            <p className="mt-1 text-[11px] text-slate-400">Stand inside the clinic and tap this to fill in the coordinates precisely, instead of typing them.</p>
-          </div>
-
-          <button type="submit" disabled={savingAttendance} className="rounded-lg bg-navy-900 px-4 py-2 text-sm font-medium text-white hover:bg-navy-800 disabled:opacity-50">
-            {savingAttendance ? 'Saving…' : 'Save'}
-          </button>
-        </form>
-      )}
-
       {category === 'templates' && (
         <div className="space-y-4">
           <div className={card}>
@@ -1429,87 +1162,6 @@ export default function Settings() {
           </button>
         </div>
       )}
-
-      {category === 'financial' && (
-        <div className={card}>
-          <div>
-            <h2 className="font-medium text-navy-900">Expense categories &amp; items</h2>
-            <p className="text-sm text-slate-500">Categories shown when recording an expense; each category has its own list of items. Choosing a category on the expense form shows only that category's items.</p>
-          </div>
-
-          <div className="grid gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3 sm:grid-cols-3">
-            <label className="flex items-center gap-2 text-sm text-navy-800">
-              <input type="checkbox" checked={settings.expense_category_required} onChange={(e) => updateExpenseReq({ expense_category_required: e.target.checked })} />
-              Category required
-            </label>
-            <label className="flex items-center gap-2 text-sm text-navy-800">
-              <input type="checkbox" checked={settings.expense_item_required} onChange={(e) => updateExpenseReq({ expense_item_required: e.target.checked })} />
-              Item required
-            </label>
-            <label className="flex items-center gap-2 text-sm text-navy-800">
-              <input type="checkbox" checked={settings.expense_description_required} onChange={(e) => updateExpenseReq({ expense_description_required: e.target.checked })} />
-              Description required
-            </label>
-          </div>
-
-          <div className="space-y-3">
-            {expenseCategories.length === 0 && <p className="text-sm text-slate-500">No categories yet.</p>}
-            {expenseCategories.map((c) => (
-              <div key={c.id} className="rounded-lg border border-slate-200 p-3">
-                <div className="flex items-center justify-between">
-                  <p className="font-medium text-navy-900">{c.name}</p>
-                  <button onClick={() => handleDeleteExpenseCategory(c.id)} className="text-xs text-red-600 hover:underline">
-                    Delete category
-                  </button>
-                </div>
-                <div className="mt-2 flex flex-wrap gap-2">
-                  {expenseItems.filter((i) => i.category_id === c.id).length === 0 && <span className="text-xs text-slate-400">No items yet.</span>}
-                  {expenseItems
-                    .filter((i) => i.category_id === c.id)
-                    .map((i) => (
-                      <span key={i.id} className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-slate-50 py-1 pl-3 pr-1.5 text-sm text-navy-800">
-                        {i.name}
-                        <button onClick={() => handleDeleteExpenseItem(i.id)} title="Remove item" className="rounded-full px-1 text-slate-400 hover:bg-red-100 hover:text-red-600">
-                          ×
-                        </button>
-                      </span>
-                    ))}
-                </div>
-                <div className="mt-2 flex gap-2">
-                  <input
-                    value={newExpenseItem[c.id] ?? ''}
-                    onChange={(e) => setNewExpenseItem((m) => ({ ...m, [c.id]: e.target.value }))}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') {
-                        e.preventDefault()
-                        handleAddExpenseItem(c.id)
-                      }
-                    }}
-                    placeholder="Add an item to this category"
-                    className="flex-1 rounded-lg border border-slate-300 px-3 py-1.5 text-sm"
-                  />
-                  <button onClick={() => handleAddExpenseItem(c.id)} className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium text-navy-800 hover:bg-slate-50">
-                    + Item
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-
-          <form onSubmit={handleAddExpenseCategory} className="flex gap-2 border-t border-slate-100 pt-3">
-            <input
-              value={newExpenseCategory}
-              onChange={(e) => setNewExpenseCategory(e.target.value)}
-              placeholder="New category (e.g. Lab fees)"
-              className="flex-1 rounded-lg border border-slate-300 px-3 py-2 text-sm"
-            />
-            <button type="submit" className="rounded-lg bg-navy-900 px-4 py-2 text-sm font-medium text-white hover:bg-navy-800">
-              Add category
-            </button>
-          </form>
-        </div>
-      )}
-
 
       {category === 'reminders' && (
         <form onSubmit={handleSaveReminders} className={card}>

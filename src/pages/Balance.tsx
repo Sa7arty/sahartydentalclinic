@@ -29,8 +29,9 @@ import {
 } from '../types'
 import { toYmd, fromYmd, startOfWeek, formatDate, formatDateTime, toDatetimeLocal } from '../lib/dates'
 import { exportOutstandingBalancesPdf, exportPaymentReceiptPdf } from '../lib/pdf'
+import FinanceSettingsTab from '../components/FinanceSettingsTab'
 
-type SideTab = 'cashflow' | 'income' | 'expenses' | 'discounts' | 'outstanding'
+type SideTab = 'cashflow' | 'income' | 'expenses' | 'discounts' | 'outstanding' | 'settings'
 type Period =
   | 'today'
   | 'yesterday'
@@ -150,7 +151,7 @@ async function fetchAllRows<T>(buildQuery: () => any): Promise<T[]> {
 }
 
 export default function Balance() {
-  const { session, isDentist, can } = useAuth()
+  const { session, isDentist, can, canAccess } = useAuth()
   const { settings } = useSettings()
   const [tab, setTab] = useState<SideTab>('cashflow')
   const [period, setPeriod] = useState<Period>('this_month')
@@ -534,7 +535,7 @@ export default function Balance() {
 
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-1 rounded-lg border border-slate-300 bg-white p-1 text-sm">
-          {(['cashflow', 'income', 'expenses', 'discounts', 'outstanding'] as SideTab[]).map((t) => (
+          {(['cashflow', 'income', 'expenses', 'discounts', 'outstanding', ...(isDentist || canAccess('settings') ? ['settings'] : [])] as SideTab[]).map((t) => (
             <button
               key={t}
               onClick={() => setTab(t)}
@@ -544,7 +545,7 @@ export default function Balance() {
             </button>
           ))}
         </div>
-        {tab !== 'outstanding' && (
+        {tab !== 'outstanding' && tab !== 'settings' && (
           <div className="flex flex-wrap items-center gap-2">
             <select value={period} onChange={(e) => setPeriod(e.target.value as Period)} className="rounded-lg border border-slate-300 px-3 py-2 text-sm">
               {PERIOD_OPTIONS.map((o) => (
@@ -564,7 +565,9 @@ export default function Balance() {
         )}
       </div>
 
-      {tab === 'outstanding' ? (
+      {tab === 'settings' ? (
+        <FinanceSettingsTab />
+      ) : tab === 'outstanding' ? (
         <div className="space-y-4">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="grid grid-cols-2 gap-3">
