@@ -82,6 +82,8 @@ function ClockWidget() {
   const { settings } = useSettings()
   const [employee, setEmployee] = useState<Employee | null | undefined>(undefined) // undefined = still loading
   const [todayRow, setTodayRow] = useState<EmployeeAttendance | null>(null)
+  // Yesterday's row — only matters if that shift is still open (see openPrevRow below).
+  const [prevRow, setPrevRow] = useState<EmployeeAttendance | null>(null)
   const [working, setWorking] = useState<'in' | 'out' | null>(null)
   const [error, setError] = useState<string | null>(null)
 
@@ -101,8 +103,19 @@ function ClockWidget() {
         .eq('work_date', toYmd(new Date()))
         .maybeSingle()
       setTodayRow((row as EmployeeAttendance) ?? null)
+      const yesterday = new Date()
+      yesterday.setDate(yesterday.getDate() - 1)
+      const { data: prev } = await supabase.from('employee_attendance').select('*').eq('employee_id', emp.id).eq('work_date', toYmd(yesterday)).maybeSingle()
+      setPrevRow((prev as EmployeeAttendance) ?? null)
     }
   }
+
+  // A shift that runs past midnight is signed out the next calendar day (e.g.
+  // in at 14:30, out at 02:00). Until noon, an unfinished shift from yesterday
+  // is still "the current shift": it is what the widget shows, and what Sign
+  // Out closes — instead of starting a bogus new row for today.
+  const openPrevRow = prevRow && prevRow.check_in && !prevRow.check_out && new Date().getHours() < 12 ? prevRow : null
+  const shownRow = openPrevRow ?? todayRow
 
   async function verifyAtClinic(): Promise<boolean> {
     setError(null)
@@ -133,7 +146,7 @@ function ClockWidget() {
   // in that morning still needs to be able to sign out at the end of the day,
   // not be blocked because there's no check-in on record yet.
   async function handleSignIn() {
-    if (!employee || todayRow?.check_in) return
+    if (!employee || shownRow?.check_in) return
     setWorking('in')
     const ok = await verifyAtClinic()
     if (!ok) {
@@ -153,11 +166,19 @@ function ClockWidget() {
   }
 
   async function handleSignOut() {
-    if (!employee || todayRow?.check_out) return
+    if (!employee || shownRow?.check_out) return
     setWorking('out')
     const ok = await verifyAtClinic()
     if (!ok) {
       setWorking(null)
+      return
+    }
+    // Closing yesterday's overnight shift: finish THAT row, don't create a new one.
+    if (openPrevRow) {
+      const { data, error: dbErr } = await supabase.from('employee_attendance').update({ check_out: nowTimeString() }).eq('id', openPrevRow.id).select().single()
+      setWorking(null)
+      if (dbErr) return setError(dbErr.message)
+      setPrevRow(data as EmployeeAttendance)
       return
     }
     // Upsert (not update) so signing out works even with no check-in on record
@@ -182,26 +203,26 @@ function ClockWidget() {
         <div>
           <p className="text-sm font-medium text-navy-900">Attendance</p>
           <p className="text-xs text-slate-500">
-            {todayRow?.check_in ? `Signed in at ${fmtTime(todayRow.check_in)}` : 'Not signed in yet'}
+            {shownRow?.check_in ? `Signed in at ${fmtTime(shownRow.check_in)}${openPrevRow ? ' (yesterday)' : ''}` : 'Not signed in yet'}
             {' · '}
-            {todayRow?.check_out ? `Signed out at ${fmtTime(todayRow.check_out)}` : 'Not signed out yet'}
-            {todayRow?.check_in && todayRow?.check_out && ` · ${attendanceHours(todayRow).toFixed(1)}h today`}
+            {shownRow?.check_out ? `Signed out at ${fmtTime(shownRow.check_out)}` : 'Not signed out yet'}
+            {shownRow?.check_in && shownRow?.check_out && ` · ${attendanceHours(shownRow).toFixed(1)}h today`}
           </p>
         </div>
         <div className="flex gap-2">
           <button
             onClick={handleSignIn}
-            disabled={working !== null || !!todayRow?.check_in}
+            disabled={working !== null || !!shownRow?.check_in}
             className="rounded-lg bg-green-600 px-4 py-2 text-sm font-medium text-white hover:bg-green-700 disabled:opacity-50"
           >
-            {todayRow?.check_in ? `✓ In ${fmtTime(todayRow.check_in)}` : working === 'in' ? 'Checking location…' : '📍 Sign In'}
+            {shownRow?.check_in ? `✓ In ${fmtTime(shownRow.check_in)}` : working === 'in' ? 'Checking location…' : '📍 Sign In'}
           </button>
           <button
             onClick={handleSignOut}
-            disabled={working !== null || !!todayRow?.check_out}
+            disabled={working !== null || !!shownRow?.check_out}
             className="rounded-lg bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700 disabled:opacity-50"
           >
-            {todayRow?.check_out ? `✓ Out ${fmtTime(todayRow.check_out)}` : working === 'out' ? 'Checking location…' : '📍 Sign Out'}
+            {shownRow?.check_out ? `✓ Out ${fmtTime(shownRow.check_out)}` : working === 'out' ? 'Checking location…' : '📍 Sign Out'}
           </button>
         </div>
       </div>

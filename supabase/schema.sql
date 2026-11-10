@@ -1207,6 +1207,21 @@ create policy "staff can clock out for today" on public.employee_attendance for 
     and employee_id in (select id from public.employees where user_id = auth.uid())
   );
 
+-- A shift that runs past midnight is still signed out the next calendar day.
+-- Let staff close THEIR OWN shift from yesterday, but only if it was left open
+-- (signed in, no sign-out yet). Nothing else from the past can be touched.
+create policy "staff can close yesterdays open shift" on public.employee_attendance for update
+  using (
+    work_date = (now() at time zone 'Africa/Cairo')::date - 1
+    and check_in is not null
+    and check_out is null
+    and employee_id in (select id from public.employees where user_id = auth.uid())
+  )
+  with check (
+    work_date = (now() at time zone 'Africa/Cairo')::date - 1
+    and employee_id in (select id from public.employees where user_id = auth.uid())
+  );
+
 -- Historical stock import from the owner's 2023-2026 Excel tracking sheets
 -- (2026-09-15): inventory_clusters gained an active flag so a since-retired
 -- storage location (e.g. old categories replaced in a Sep 2024 restructure)
